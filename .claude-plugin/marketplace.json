@@ -1,0 +1,14 @@
+{
+  "name": "claude-fleet",
+  "description": "Claude Fleet: named always-on Claude Code sessions and a dev team of subagents. This marketplace ships the dev-team-view progress panel.",
+  "owner": {
+    "name": "Amar Cutura"
+  },
+  "plugins": [
+    {
+      "name": "dev-team-view",
+      "source": "./plugins/dev-team-view",
+      "description": "Live /dev-team progress: a pane with waves, tasks, reviews and rulings, plus a one-line band while a run is active"
+    }
+  ]
+}

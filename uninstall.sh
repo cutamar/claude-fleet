@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Remove everything install.sh added. Your sessions.toml and agent notes stay.
+# Running sessions keep running; stop them first with `fleet down`.
+set -euo pipefail
+REPO="$(cd "$(dirname "$0")" && pwd)"
+HYPR="$HOME/.config/hypr/custom"
+
+unlink_if_ours() { if [ -L "$1" ] && [[ "$(readlink "$1")" == "$REPO"* ]]; then rm "$1"; echo "removed: $1"; fi; }
+
+unlink_if_ours "$HOME/.local/bin/fleet"
+unlink_if_ours "$HOME/.claude/fleet-hooks"
+for f in "$REPO"/agents/*.md; do unlink_if_ours "$HOME/.claude/agents/$(basename "$f")"; done
+unlink_if_ours "$HOME/.claude/skills/dev-team"
+
+for file in "$HYPR/execs.lua" "$HYPR/keybinds.lua"; do
+  [ -f "$file" ] || continue
+  if grep -qF -- "-- >>> claude-fleet >>>" "$file"; then
+    sed -i '/^-- >>> claude-fleet >>>$/,/^-- <<< claude-fleet <<<$/d' "$file"
+    echo "unhooked: $file"
+  fi
+done
+if [ -f "$HOME/.config/autostart/claude-fleet.desktop" ]; then
+  rm "$HOME/.config/autostart/claude-fleet.desktop"; echo "removed: ~/.config/autostart/claude-fleet.desktop"
+fi

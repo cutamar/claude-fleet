@@ -1,0 +1,33 @@
+# Claude Fleet sessions.
+# Each [[session]] is a named Claude Code session that runs in its folder.
+# `fleet up` starts every autostart session (Hyprland runs it at login) and
+# resumes the last conversation with that name. Add more with:
+#   fleet add <name> <folder> [--model sonnet] [--no-autostart] [--start]
+#
+# Per-session keys (all optional except name and dir):
+#   autostart       start at login (default true)
+#   model           opus | sonnet | haiku | full model id (default: your default model)
+#   effort          low | medium | high | xhigh | max
+#   agent           run the whole session as one of the agents in ~/.claude/agents
+#   permission_mode auto | default | acceptEdits | plan   (default "auto")
+#   remote_control  true/false - reachable from claude.ai/code and the mobile app (default true)
+#   args            extra claude CLI flags, e.g. ["--add-dir", "~/shared"]
+# A folder must be trusted once: run `claude` in it and accept the prompt.
+
+[defaults]
+permission_mode = "auto"
+remote_control = true
+
+# One entry per session. The folder must exist and be trusted once
+# (run `claude` there and accept the prompt).
+
+[[session]]
+name = "my-app"
+dir = "~/code/my-app"
+autostart = true
+
+[[session]]
+name = "website"
+dir = "~/code/website"
+model = "sonnet"        # optional: opus | sonnet | haiku
+autostart = false       # start it on demand with: fleet up website

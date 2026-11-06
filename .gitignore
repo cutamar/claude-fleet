@@ -1,0 +1,8 @@
+# your own session list (copy sessions.example.toml)
+sessions.toml
+# per-project agent notes and dev-team runs
+.claude/agent-memory-local/
+.claude/plans/
+.claude/worktrees/
+__pycache__/
+*.pyc

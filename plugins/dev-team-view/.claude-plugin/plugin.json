@@ -1,0 +1,12 @@
+{
+  "name": "dev-team-view",
+  "version": "0.1.0",
+  "description": "Live /dev-team progress: a pane with waves, tasks, reviews and rulings, plus a one-line band while a run is active",
+  "types": "./types/index.d.ts",
+  "author": {
+    "name": "Amar Cutura"
+  },
+  "license": "MIT",
+  "homepage": "https://github.com/cutamar/claude-fleet",
+  "repository": "https://github.com/cutamar/claude-fleet"
+}

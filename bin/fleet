@@ -1,0 +1,483 @@
+#!/usr/bin/env python3
+"""fleet - manage named, resumable Claude Code sessions.
+
+Sessions run as Claude Code background sessions (`claude --bg`), so they keep
+running when no terminal is open, and you can jump into any of them with
+`fleet ui` (Claude's agent view) or `fleet attach <name>`.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+import tomllib
+from pathlib import Path
+
+HOME = Path.home()
+REPO = Path(__file__).resolve().parent.parent
+CONFIG = Path(os.environ.get("FLEET_CONFIG", REPO / "sessions.toml")).expanduser()
+STATE_DIR = HOME / ".local/state/claude-fleet"
+LOG = STATE_DIR / "fleet.log"
+CLAUDE = shutil.which("claude") or str(HOME / ".local/bin/claude")
+NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+UI_CLASS = "claude-fleet"
+BOOT = False  # set by `up --boot`: log to file and send desktop notifications
+
+
+# ---------- helpers ----------
+
+def log(msg: str) -> None:
+    print(msg, flush=True)
+    if BOOT:
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        with LOG.open("a") as f:
+            f.write(time.strftime("%F %T ") + msg + "\n")
+
+
+def notify(summary: str, body: str = "") -> None:
+    if BOOT and shutil.which("notify-send"):
+        subprocess.run(["notify-send", "-a", "Claude Fleet", summary, body], check=False)
+
+
+def die(msg: str) -> None:
+    print(f"fleet: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+
+def load_config() -> tuple[dict, list[dict]]:
+    if not CONFIG.exists():
+        die(f"no sessions file at {CONFIG}\n  create it: cp {REPO}/sessions.example.toml {CONFIG}   (or run ./install.sh)")
+    with CONFIG.open("rb") as f:
+        data = tomllib.load(f)
+    defaults = data.get("defaults", {})
+    sessions = []
+    seen = set()
+    for raw in data.get("session", []):
+        s = {**defaults, **raw}
+        name = s.get("name", "")
+        if not NAME_RE.match(name):
+            die(f"invalid session name {name!r} (use letters, digits, . _ -)")
+        if name in seen:
+            die(f"duplicate session name {name!r}")
+        seen.add(name)
+        s["dir"] = str(Path(s.get("dir", "~")).expanduser().resolve())
+        s.setdefault("autostart", True)
+        s.setdefault("permission_mode", "auto")
+        s.setdefault("remote_control", True)
+        sessions.append(s)
+    return defaults, sessions
+
+
+def select(sessions: list[dict], names: list[str]) -> list[dict]:
+    if not names:
+        return sessions
+    by_name = {s["name"]: s for s in sessions}
+    missing = [n for n in names if n not in by_name]
+    if missing:
+        die(f"unknown session(s): {', '.join(missing)}  (see `fleet ls`)")
+    return [by_name[n] for n in names]
+
+
+def running() -> list[dict]:
+    """Live Claude sessions (interactive and background) from `claude agents --json`."""
+    try:
+        out = subprocess.run([CLAUDE, "agents", "--json"], capture_output=True,
+                             text=True, timeout=20, stdin=subprocess.DEVNULL).stdout
+        return json.loads(out or "[]")
+    except (subprocess.SubprocessError, json.JSONDecodeError):
+        return []
+
+
+def live_for(name: str, live: list[dict]) -> list[dict]:
+    return [a for a in live if a.get("name") == name]
+
+
+def is_trusted(directory: str) -> bool:
+    try:
+        projects = json.loads((HOME / ".claude.json").read_text()).get("projects", {})
+    except (OSError, json.JSONDecodeError):
+        return False
+    p = Path(directory)
+    if p == HOME:  # Claude only trusts $HOME one interactive session at a time
+        return False
+    for cand in [p, *p.parents]:
+        if projects.get(str(cand), {}).get("hasTrustDialogAccepted"):
+            return True
+    return False
+
+
+def transcript_dir(directory: str) -> Path:
+    return HOME / ".claude/projects" / re.sub(r"[^a-zA-Z0-9]", "-", directory)
+
+
+def last_session_id(name: str, directory: str) -> str | None:
+    """Newest saved conversation in `directory` that is named `name` and has messages."""
+    tdir = transcript_dir(directory)
+    if not tdir.is_dir():
+        return None
+    files = sorted(tdir.glob("*.jsonl"), key=lambda f: f.stat().st_mtime, reverse=True)
+    for f in files:
+        title, has_user = None, False
+        try:
+            with f.open(errors="replace") as fh:
+                for line in fh:
+                    if '"custom-title"' in line or '"agent-name"' in line:
+                        try:
+                            e = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        title = e.get("customTitle") or e.get("agentName") or title
+                    elif not has_user and '"type":"user"' in line:
+                        has_user = True
+        except OSError:
+            continue
+        if title == name and has_user:
+            return f.stem
+    return None
+
+
+def build_cmd(s: dict, resume_id: str | None) -> list[str]:
+    cmd = [CLAUDE, "--bg", "--name", s["name"], "--permission-mode", s["permission_mode"]]
+    if resume_id:
+        cmd += ["--resume", resume_id]
+    if s.get("remote_control"):
+        cmd += ["--remote-control", s["name"]]
+    for key in ("model", "effort", "agent"):
+        if s.get(key):
+            cmd += [f"--{key}", str(s[key])]
+    cmd += [str(a) for a in s.get("args", [])]
+    return cmd
+
+
+def wait_for_network(timeout: int = 90) -> None:
+    if shutil.which("nm-online"):
+        subprocess.run(["nm-online", "-q", "-t", str(timeout)], check=False)
+
+
+def in_terminal() -> bool:
+    return sys.stdin.isatty() and sys.stdout.isatty()
+
+
+def focus_or_spawn_ui(cmd_args: list[str], title: str) -> None:
+    """From a hotkey (no terminal): focus the fleet window if open, else open kitty."""
+    if shutil.which("hyprctl"):
+        try:
+            clients = json.loads(subprocess.run(["hyprctl", "clients", "-j"],
+                                                capture_output=True, text=True).stdout)
+            if any(c.get("class") == UI_CLASS for c in clients):
+                subprocess.run(["hyprctl", "dispatch", "focuswindow", f"class:{UI_CLASS}"],
+                               capture_output=True)
+                return
+        except (json.JSONDecodeError, OSError):
+            pass
+    term = shutil.which("kitty")
+    if term:
+        argv = [term, "--class", UI_CLASS, "--title", title, sys.argv[0], *cmd_args]
+    elif shutil.which("alacritty"):
+        argv = ["alacritty", "--class", UI_CLASS, "--title", title, "-e", sys.argv[0], *cmd_args]
+    else:
+        die("no terminal found (install kitty or alacritty)")
+    subprocess.Popen(argv, start_new_session=True,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+# ---------- commands ----------
+
+def cmd_up(args) -> None:
+    global BOOT
+    BOOT = args.boot
+    _, sessions = load_config()
+    targets = select(sessions, args.names)
+    if not args.names:
+        targets = [s for s in targets if s["autostart"]]
+    if not targets:
+        log("nothing to start")
+        return
+    if args.boot and any(s.get("remote_control") for s in targets):
+        wait_for_network()
+    live = running()
+    started, problems = [], []
+    for s in targets:
+        name = s["name"]
+        if live_for(name, live):
+            log(f"= {name}: already running")
+            continue
+        if not Path(s["dir"]).is_dir():
+            problems.append(f"{name}: folder missing ({s['dir']})")
+            continue
+        if not is_trusted(s["dir"]):
+            problems.append(f"{name}: folder not trusted - run `claude` once in {s['dir']} "
+                            "and accept the trust prompt")
+            continue
+        rid = None if args.fresh else last_session_id(name, s["dir"])
+        r = subprocess.run(build_cmd(s, rid), cwd=s["dir"], capture_output=True, text=True,
+                           timeout=60, stdin=subprocess.DEVNULL)
+        if r.returncode != 0:
+            problems.append(f"{name}: {(r.stderr or r.stdout).strip().splitlines()[-1:]}")
+            continue
+        how = f"resumed {rid[:8]}" if rid else "new conversation"
+        log(f"+ {name}: started ({how}) in {s['dir']}")
+        started.append(name)
+    for p in problems:
+        log(f"! {p}")
+    if started:
+        notify(f"Started {len(started)} Claude session(s)", ", ".join(started))
+    if problems:
+        notify("Claude Fleet: some sessions didn't start", "\n".join(problems))
+        sys.exit(1)
+
+
+def cmd_down(args) -> None:
+    _, sessions = load_config()
+    targets = select(sessions, args.names)
+    live = running()
+    for s in targets:
+        bg = [a for a in live_for(s["name"], live) if a.get("kind") == "background"]
+        if not bg:
+            print(f"= {s['name']}: not running")
+        for a in bg:
+            subprocess.run([CLAUDE, "stop", a["id"]], capture_output=True, timeout=30)
+            print(f"- {s['name']}: stopped ({a['id']})")
+
+
+def cmd_restart(args) -> None:
+    cmd_down(args)
+    time.sleep(1)
+    cmd_up(argparse.Namespace(names=args.names, boot=False, fresh=False))
+
+
+def cmd_respawn(args) -> None:
+    """Restart running sessions on the current Claude binary (after `claude update`)."""
+    _, sessions = load_config()
+    targets = select(sessions, args.names)
+    live = running()
+    for s in targets:
+        for a in live_for(s["name"], live):
+            if a.get("kind") == "background":
+                subprocess.run([CLAUDE, "respawn", a["id"]], timeout=60)
+                print(f"~ {s['name']}: respawned")
+
+
+def cmd_ls(args) -> None:
+    _, sessions = load_config()
+    live = running()
+    rows = [("NAME", "STATE", "AUTO", "MODEL", "FOLDER")]
+    for s in sessions:
+        lv = live_for(s["name"], live)
+        if lv:
+            a = lv[0]
+            kind = 'bg' if a.get('kind') == 'background' else 'tty'
+            state = f"{a.get('status', '?')} ({kind} {a.get('id') or a.get('pid')})"
+        else:
+            state = "stopped"
+        folder = s["dir"].replace(str(HOME), "~")
+        if not is_trusted(s["dir"]):
+            folder += "  [untrusted]"
+        rows.append((s["name"], state, "yes" if s["autostart"] else "no",
+                     s.get("model", "default"), folder))
+    widths = [max(len(r[i]) for r in rows) for i in range(len(rows[0]) - 1)]
+    for r in rows:
+        print("  ".join(c.ljust(w) for c, w in zip(r, widths)) + "  " + r[-1])
+
+
+def cmd_attach(args) -> None:
+    if not in_terminal():
+        focus_or_spawn_ui(["attach", args.name], f"Claude: {args.name}")
+        return
+    _, sessions = load_config()
+    s = select(sessions, [args.name])[0]
+    bg = [a for a in live_for(s["name"], running()) if a.get("kind") == "background"]
+    if not bg:
+        cmd_up(argparse.Namespace(names=[s["name"]], boot=False, fresh=False))
+        time.sleep(2)
+        bg = [a for a in live_for(s["name"], running()) if a.get("kind") == "background"]
+        if not bg:
+            die(f"could not start {s['name']}")
+    os.execv(CLAUDE, [CLAUDE, "attach", bg[0]["id"]])
+
+
+def cmd_ui(args) -> None:
+    if not in_terminal():
+        focus_or_spawn_ui(["ui"], "Claude Fleet")
+        return
+    os.execv(CLAUDE, [CLAUDE, "agents"])
+
+
+def cmd_pick(args) -> None:
+    if not in_terminal():
+        focus_or_spawn_ui(["pick"], "Claude Fleet")
+        return
+    if not shutil.which("fzf"):
+        die("fzf not installed; use `fleet ui` instead")
+    _, sessions = load_config()
+    live = running()
+    lines = []
+    for s in sessions:
+        lv = live_for(s["name"], live)
+        state = lv[0].get("status", "running") if lv else "stopped"
+        lines.append(f"{s['name']}\t{state}\t{s['dir'].replace(str(HOME), '~')}")
+    r = subprocess.run(["fzf", "--delimiter=\t", "--with-nth=1,2,3", "--prompt=claude> ",
+                        "--header=Enter: open session (starts it if stopped)"],
+                       input="\n".join(lines), capture_output=True, text=True)
+    if r.returncode == 0 and r.stdout.strip():
+        cmd_attach(argparse.Namespace(name=r.stdout.split("\t")[0]))
+
+
+def cmd_logs(args) -> None:
+    bg = [a for a in live_for(args.name, running()) if a.get("kind") == "background"]
+    if not bg:
+        die(f"{args.name} is not running")
+    os.execv(CLAUDE, [CLAUDE, "logs", bg[0]["id"]])
+
+
+def toml_str(v: str) -> str:
+    return json.dumps(v)  # JSON string escaping is valid TOML basic-string escaping
+
+
+def cmd_add(args) -> None:
+    if not NAME_RE.match(args.name):
+        die("name may only contain letters, digits, . _ -")
+    _, sessions = load_config()
+    if any(s["name"] == args.name for s in sessions):
+        die(f"{args.name} already exists in {CONFIG}")
+    d = Path(args.dir).expanduser().resolve()
+    if not d.is_dir():
+        die(f"folder does not exist: {d}")
+    shown = str(d).replace(str(HOME), "~", 1)
+    block = ["", "[[session]]", f"name = {toml_str(args.name)}", f"dir = {toml_str(shown)}",
+             f"autostart = {'false' if args.no_autostart else 'true'}"]
+    if args.model:
+        block.append(f"model = {toml_str(args.model)}")
+    if args.effort:
+        block.append(f"effort = {toml_str(args.effort)}")
+    with CONFIG.open("a") as f:
+        f.write("\n".join(block) + "\n")
+    print(f"added {args.name} -> {shown}")
+    if not is_trusted(str(d)):
+        print(f"note: folder isn't trusted yet - run `claude` once in {shown} and accept the prompt")
+    if args.start:
+        cmd_up(argparse.Namespace(names=[args.name], boot=False, fresh=False))
+
+
+MEM_WARN = 180  # Claude loads only the first 200 lines of an agent's MEMORY.md
+
+
+def memory_files(root: Path) -> list[Path]:
+    return sorted(root.glob(".claude/agent-memory-local/*/MEMORY.md"))
+
+
+def sync_worktree_memory(repo: Path) -> int:
+    """Copy note lines from agent worktrees (.claude/worktrees/*) into the repo's own files."""
+    added = 0
+    for wt_file in sorted(repo.glob(".claude/worktrees/*/.claude/agent-memory-local/*/MEMORY.md")):
+        if wt_file.is_symlink():
+            continue
+        agent = wt_file.parent.name
+        if not NAME_RE.match(agent):
+            continue
+        main = repo / ".claude/agent-memory-local" / agent / "MEMORY.md"
+        if main.is_symlink():
+            continue
+        main.parent.mkdir(parents=True, exist_ok=True)
+        text = main.read_text() if main.exists() else ""
+        have = text.splitlines()
+        new = [l for l in wt_file.read_text().splitlines()
+               if l.strip().startswith("- ") and l not in have]
+        if new:
+            with main.open("a") as f:
+                if text and not text.endswith("\n"):
+                    f.write("\n")
+                f.write("\n".join(new) + "\n")
+            print(f"+ {agent}: {len(new)} line(s) from {wt_file.parents[3].name}")
+            added += len(new)
+    return added
+
+
+def cmd_memory(args) -> None:
+    if args.action == "sync":
+        repo = Path(args.repo or os.getcwd()).expanduser().resolve()
+        n = sync_worktree_memory(repo)
+        print(f"synced {n} line(s) into {repo}" if n else "nothing to sync")
+        return
+    _, sessions = load_config()
+    roots = sorted({Path(s["dir"]) for s in sessions})
+    found = False
+    for root in roots:
+        for f in memory_files(root):
+            found = True
+            lines = len(f.read_text().splitlines())
+            warn = f"  ! over {MEM_WARN} lines - prune it (only 200 are loaded)" if lines > MEM_WARN else ""
+            print(f"{lines:4}  {str(f).replace(str(HOME), '~')}{warn}")
+    if not found:
+        print("no agent memory yet")
+
+
+def cmd_edit(args) -> None:
+    editor = os.environ.get("EDITOR") or shutil.which("nvim") or shutil.which("nano") or "vi"
+    os.execvp(editor, [editor, str(CONFIG)])
+
+
+def main() -> None:
+    p = argparse.ArgumentParser(prog="fleet", description=__doc__,
+                                formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = p.add_subparsers(dest="cmd")
+
+    a = sub.add_parser("up", help="start sessions (default: all autostart ones), resuming each")
+    a.add_argument("names", nargs="*")
+    a.add_argument("--fresh", action="store_true", help="start new conversations, don't resume")
+    a.add_argument("--boot", action="store_true", help="login mode: wait for network, log, notify")
+    a.set_defaults(fn=cmd_up)
+
+    a = sub.add_parser("down", help="stop sessions (default: all configured)")
+    a.add_argument("names", nargs="*")
+    a.set_defaults(fn=cmd_down)
+
+    a = sub.add_parser("restart", help="stop then start (resumes the conversation)")
+    a.add_argument("names", nargs="*")
+    a.set_defaults(fn=cmd_restart)
+
+    a = sub.add_parser("respawn", help="move running sessions onto the current Claude version")
+    a.add_argument("names", nargs="*")
+    a.set_defaults(fn=cmd_respawn)
+
+    sub.add_parser("ls", help="show configured sessions and their state").set_defaults(fn=cmd_ls)
+    sub.add_parser("ui", help="open Claude's agent view to switch between sessions").set_defaults(fn=cmd_ui)
+    sub.add_parser("pick", help="fzf picker over configured sessions").set_defaults(fn=cmd_pick)
+
+    a = sub.add_parser("attach", help="open one session in this terminal")
+    a.add_argument("name")
+    a.set_defaults(fn=cmd_attach)
+
+    a = sub.add_parser("logs", help="print a session's recent output")
+    a.add_argument("name")
+    a.set_defaults(fn=cmd_logs)
+
+    a = sub.add_parser("add", help="add a session to sessions.toml")
+    a.add_argument("name")
+    a.add_argument("dir")
+    a.add_argument("--no-autostart", action="store_true")
+    a.add_argument("--model")
+    a.add_argument("--effort")
+    a.add_argument("--start", action="store_true", help="start it right away")
+    a.set_defaults(fn=cmd_add)
+
+    a = sub.add_parser("memory", help="list agent memory files (sizes), or `sync` notes back from worktrees")
+    a.add_argument("action", nargs="?", choices=["list", "sync"], default="list")
+    a.add_argument("repo", nargs="?", help="repo for `sync` (default: current folder)")
+    a.set_defaults(fn=cmd_memory)
+
+    sub.add_parser("edit", help="open sessions.toml in $EDITOR").set_defaults(fn=cmd_edit)
+
+    args = p.parse_args()
+    if not args.cmd:
+        args = p.parse_args(["ui"])
+    args.fn(args)
+
+
+if __name__ == "__main__":
+    main()
