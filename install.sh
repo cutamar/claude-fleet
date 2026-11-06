@@ -4,14 +4,19 @@
 #   - links the dev-team agents, the /dev-team skill and the agent guard hooks into ~/.claude
 #   - creates sessions.toml from sessions.example.toml if you don't have one yet
 #   - autostart at login: Hyprland (plus Super+Alt+C hotkey) if found, otherwise an XDG autostart entry
-# Options: --no-autostart   skip the login autostart / hotkey setup
+# Options:
+#   --systemd        start sessions at boot, before you log in (systemd user service + linger);
+#                    replaces the login autostart (the Hyprland hotkey stays)
+#   --no-autostart   skip all autostart / hotkey setup
 set -euo pipefail
 REPO="$(cd "$(dirname "$0")" && pwd)"
 AUTOSTART=1
+SYSTEMD=0
 for arg in "$@"; do
   case "$arg" in
     --no-autostart) AUTOSTART=0 ;;
-    -h|--help) sed -n '2,8p' "$0"; exit 0 ;;
+    --systemd) SYSTEMD=1 ;;
+    -h|--help) sed -n '2,11p' "$0"; exit 0 ;;
     *) echo "unknown option: $arg" >&2; exit 2 ;;
   esac
 done
@@ -43,7 +48,33 @@ if [ ! -f "$REPO/sessions.toml" ]; then
   echo "new:  $REPO/sessions.toml (edit it, or use: fleet add <name> <folder>)"
 fi
 
-if [ "$AUTOSTART" = 1 ]; then
+if [ "$AUTOSTART" = 1 ] && [ "$SYSTEMD" = 1 ]; then
+  command -v systemctl >/dev/null || { echo "systemd not found; drop --systemd" >&2; exit 1; }
+  UNIT_DIR="$HOME/.config/systemd/user"
+  mkdir -p "$UNIT_DIR"
+  cp "$REPO/systemd/claude-fleet.service" "$UNIT_DIR/claude-fleet.service"
+  systemctl --user daemon-reload
+  systemctl --user enable claude-fleet.service >/dev/null 2>&1 && echo "on:   systemd user service claude-fleet (starts at boot)"
+  if [ "$(loginctl show-user "$USER" -p Linger --value 2>/dev/null)" != "yes" ]; then
+    if loginctl enable-linger "$USER" 2>/dev/null; then
+      echo "on:   linger for $USER (your user services start at boot, before login)"
+    else
+      echo "todo: run 'sudo loginctl enable-linger $USER' so the service starts before login"
+    fi
+  fi
+  # The service replaces the login autostart; keep only the hotkey.
+  HYPR_EXECS="$HOME/.config/hypr/custom/execs.lua"
+  if [ -f "$HYPR_EXECS" ] && grep -qF -- "-- >>> claude-fleet >>>" "$HYPR_EXECS"; then
+    sed -i '/^-- >>> claude-fleet >>>$/,/^-- <<< claude-fleet <<<$/d' "$HYPR_EXECS"
+    echo "off:  Hyprland login autostart (the service does it now)"
+  fi
+  rm -f "$HOME/.config/autostart/claude-fleet.desktop"
+  HYPR_KEYS="$HOME/.config/hypr/custom/keybinds.lua"
+  if [ -f "$HYPR_KEYS" ] && ! grep -qF -- "-- >>> claude-fleet >>>" "$HYPR_KEYS"; then
+    printf '\n%s\n%s\n%s\n' "-- >>> claude-fleet >>>" 'hl.bind("SUPER + ALT + C", hl.dsp.exec_cmd("$HOME/.local/bin/fleet ui"), { description = "Claude Fleet: switch sessions" })' "-- <<< claude-fleet <<<" >> "$HYPR_KEYS"
+    echo "hook: $HYPR_KEYS"
+  fi
+elif [ "$AUTOSTART" = 1 ]; then
   HYPR="$HOME/.config/hypr/custom"
   MARK_BEGIN="-- >>> claude-fleet >>>"
   MARK_END="-- <<< claude-fleet <<<"

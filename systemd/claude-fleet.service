@@ -1,0 +1,23 @@
+# Claude Fleet as a systemd user service: starts your autostart sessions at boot,
+# before you log in (needs `loginctl enable-linger $USER`), and stops them cleanly
+# at shutdown. Installed by `./install.sh --systemd`.
+#   status:  systemctl --user status claude-fleet
+#   logs:    journalctl --user -u claude-fleet   (and ~/.local/state/claude-fleet/fleet.log)
+
+[Unit]
+Description=Claude Fleet - named Claude Code sessions
+Documentation=https://github.com/cutamar/claude-fleet
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+# Leading "-": a session that can't start (e.g. untrusted folder) must not mark the
+# unit failed, which would make systemd kill the sessions that did start.
+ExecStart=-%h/.local/bin/fleet up --boot
+ExecStop=-%h/.local/bin/fleet down
+TimeoutStartSec=300
+TimeoutStopSec=90
+
+[Install]
+WantedBy=default.target

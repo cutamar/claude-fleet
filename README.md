@@ -36,7 +36,7 @@ everything up. It asks you before it changes your desktop's autostart.
 
 ```bash
 git clone https://github.com/cutamar/claude-fleet ~/claude-fleet
-~/claude-fleet/install.sh
+~/claude-fleet/install.sh --systemd     # or without --systemd: start at login instead of boot
 fleet add my-app ~/code/my-app && fleet up
 ```
 
@@ -65,8 +65,15 @@ Claude Code **background session** in its folder with:
 - **auto mode:** a safety classifier approves routine actions instead of prompting
 - **Remote Control:** reachable from claude.ai/code and the Claude mobile app
 
-At login, `fleet up --boot` waits for the network, starts the sessions marked `autostart`, and sends a
-desktop notification.
+Two ways to start them automatically:
+
+| | When | How |
+|---|---|---|
+| **At boot** (`install.sh --systemd`) | right after the machine starts, **before you log in**. Reach your sessions from your phone while the PC sits at the login screen. | systemd user service `claude-fleet` + `loginctl enable-linger`. Sessions stop cleanly at shutdown. |
+| **At login** (`install.sh`) | when you log in to your desktop | Hyprland `exec` or an XDG autostart entry, plus a desktop notification |
+
+Either way, `fleet up --boot` waits for the network and starts the sessions marked `autostart`.
+Running `fleet up` again is always safe: sessions that already run are left alone.
 
 ### 2. Switching between sessions
 
@@ -191,7 +198,13 @@ untrusted folders.
 ## Troubleshooting
 
 - **A session doesn't start:** run `fleet up <name>` in a terminal to see why (missing folder,
-  untrusted folder). Login runs log to `~/.local/state/claude-fleet/fleet.log`.
+  untrusted folder). Automatic runs log to `~/.local/state/claude-fleet/fleet.log`; the boot service
+  also logs to `journalctl --user -u claude-fleet`.
+- **Boot service:** `systemctl --user status claude-fleet`. It needs Claude Code's login stored in
+  `~/.claude/.credentials.json` (the Linux default) and a home folder that is available before login
+  (not encrypted with systemd-homed or similar). Restarting the service with `systemctl --user restart`
+  stops and resumes all sessions. Switch back to login autostart with
+  `systemctl --user disable claude-fleet && ./install.sh`.
 - **Hotkey on other desktops:** bind any key to `fleet ui` in your desktop's keyboard settings.
 - **After `claude update`:** run `fleet respawn` so running sessions use the new version.
 - **New agents not showing up:** agent definitions load at session start; `fleet respawn` reloads them.
@@ -203,7 +216,8 @@ untrusted folders.
 fleet down && ~/claude-fleet/uninstall.sh
 ```
 
-This removes the links, the autostart entry and the hotkey. Your `sessions.toml` and agent notes stay.
+This removes the links, the autostart entry or boot service, and the hotkey. Your `sessions.toml` and
+agent notes stay. Linger is left on (other services may use it): `loginctl disable-linger` turns it off.
 Remove the panel with `/plugin uninstall dev-team-view`.
 
 ## Repository layout
@@ -215,6 +229,7 @@ skills/dev-team/SKILL.md      the /dev-team orchestration workflow
 hooks/                        read-only and memory-file guards (+ test.sh)
 plugins/dev-team-view/        the progress panel mod
 .claude-plugin/marketplace.json
+systemd/claude-fleet.service the boot service (install.sh --systemd)
 install.sh / uninstall.sh
 INSTALL.md                    step-by-step install instructions for Claude
 ```

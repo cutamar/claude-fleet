@@ -17,3 +17,6 @@
 - `install.sh` edits Hyprland's `custom/*.lua` only between `claude-fleet` marker lines; keep
   `uninstall.sh` in sync with anything the installer adds.
 - `sessions.toml` is personal and gitignored; `sessions.example.toml` is the template.
+- `systemd/claude-fleet.service` is a oneshot with `RemainAfterExit`; ExecStart/ExecStop are prefixed
+  with `-` on purpose (a failed start must not make systemd kill the sessions that did start).
+  `fleet up` holds `~/.local/state/claude-fleet/up.lock` so boot and login starts can't overlap.

@@ -38,13 +38,23 @@ should start at login (default yes) and whether it needs a specific model (defau
 
 ## 4. Install
 
-Ask the user one question: **"Start these sessions automatically at login?"**
-On Hyprland this also adds the Super+Alt+C hotkey. Elsewhere it adds an XDG autostart entry.
+Ask the user one question: **"When should your sessions start automatically?"**
+
+1. **At boot, before login (recommended)**: a systemd user service. The sessions are reachable from
+   the Claude app even while the PC sits at the login screen.
+2. **At login**: when the desktop starts.
+3. **Never**: start them by hand with `fleet up`.
 
 ```bash
-~/claude-fleet/install.sh                  # yes
-~/claude-fleet/install.sh --no-autostart   # no
+~/claude-fleet/install.sh --systemd        # 1
+~/claude-fleet/install.sh                  # 2
+~/claude-fleet/install.sh --no-autostart   # 3
 ```
+
+On Hyprland, options 1 and 2 also add the Super+Alt+C hotkey. For option 1, the installer turns on
+`loginctl enable-linger`. If it prints a `todo` asking for `sudo loginctl enable-linger`, pass that
+line to the user to run. Option 1 needs Claude Code's login in `~/.claude/.credentials.json`: check
+with `test -f ~/.claude/.credentials.json` (don't read it). If it's missing, recommend option 2.
 
 The installer creates `sessions.toml` from the example. Remove the example sessions from it and add
 the user's:

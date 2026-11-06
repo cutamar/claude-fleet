@@ -8,6 +8,7 @@ running when no terminal is open, and you can jump into any of them with
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import os
 import re
@@ -40,8 +41,13 @@ def log(msg: str) -> None:
 
 
 def notify(summary: str, body: str = "") -> None:
-    if BOOT and shutil.which("notify-send"):
-        subprocess.run(["notify-send", "-a", "Claude Fleet", summary, body], check=False)
+    # Before login (systemd at boot) there is no desktop to notify; skip quietly.
+    if BOOT and shutil.which("notify-send") and os.environ.get("DBUS_SESSION_BUS_ADDRESS"):
+        try:
+            subprocess.run(["notify-send", "-a", "Claude Fleet", summary, body],
+                           check=False, timeout=5, capture_output=True)
+        except subprocess.SubprocessError:
+            pass
 
 
 def die(msg: str) -> None:
@@ -191,6 +197,10 @@ def focus_or_spawn_ui(cmd_args: list[str], title: str) -> None:
 def cmd_up(args) -> None:
     global BOOT
     BOOT = args.boot
+    # One `up` at a time: the boot service and a login autostart may overlap.
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    lock = (STATE_DIR / "up.lock").open("w")
+    fcntl.flock(lock, fcntl.LOCK_EX)
     _, sessions = load_config()
     targets = select(sessions, args.names)
     if not args.names:

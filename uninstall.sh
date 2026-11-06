@@ -7,6 +7,12 @@ HYPR="$HOME/.config/hypr/custom"
 
 unlink_if_ours() { if [ -L "$1" ] && [[ "$(readlink "$1")" == "$REPO"* ]]; then rm "$1"; echo "removed: $1"; fi; }
 
+if [ -f "$HOME/.config/systemd/user/claude-fleet.service" ]; then
+  systemctl --user disable claude-fleet.service >/dev/null 2>&1 || true
+  rm "$HOME/.config/systemd/user/claude-fleet.service"
+  systemctl --user daemon-reload
+  echo "removed: systemd user service claude-fleet (linger left as is; turn off with: loginctl disable-linger $USER)"
+fi
 unlink_if_ours "$HOME/.local/bin/fleet"
 unlink_if_ours "$HOME/.claude/fleet-hooks"
 for f in "$REPO"/agents/*.md; do unlink_if_ours "$HOME/.claude/agents/$(basename "$f")"; done
