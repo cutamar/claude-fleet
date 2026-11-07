@@ -2,7 +2,7 @@
 # Install Claude Fleet. Safe to re-run; undo with ./uninstall.sh
 #   - links the `fleet` command into ~/.local/bin
 #   - installs the `fleet` plugin (/fleet:status, /fleet:stop, ...) from this repo's marketplace
-#   - creates sessions.toml from sessions.example.toml if you don't have one yet
+#   - creates ~/.config/claude-fleet/sessions.toml from sessions.example.toml if you don't have one yet
 #   - autostart at login: Hyprland (plus Super+Alt+C hotkey) if found, otherwise an XDG autostart entry
 # Options:
 #   --systemd        start sessions at boot, before you log in (systemd user service + linger);
@@ -54,9 +54,16 @@ fi
 claude plugin uninstall dev-team-view@claude-fleet >/dev/null 2>&1 \
   && echo "gone: dev-team-view@claude-fleet (now in claude-skills)" || true
 
-if [ ! -f "$REPO/sessions.toml" ]; then
-  cp "$REPO/sessions.example.toml" "$REPO/sessions.toml"
-  echo "new:  $REPO/sessions.toml (edit it, or use: fleet add <name> <folder>)"
+CONF_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/claude-fleet"
+mkdir -p "$CONF_DIR"
+if [ ! -f "$CONF_DIR/sessions.toml" ] && [ -f "$REPO/sessions.toml" ]; then
+  mv "$REPO/sessions.toml" "$CONF_DIR/sessions.toml"   # older versions kept it in the repo
+  echo "moved: sessions.toml -> $CONF_DIR/sessions.toml"
+elif [ ! -f "$CONF_DIR/sessions.toml" ]; then
+  cp "$REPO/sessions.example.toml" "$CONF_DIR/sessions.toml"
+  echo "new:  $CONF_DIR/sessions.toml (edit it with: fleet edit, or use: fleet add <name> <folder>)"
+elif [ -f "$REPO/sessions.toml" ]; then
+  echo "note: $REPO/sessions.toml is no longer used ($CONF_DIR/sessions.toml is); delete it when you're sure"
 fi
 
 if [ "$AUTOSTART" = 1 ] && [ "$SYSTEMD" = 1 ]; then

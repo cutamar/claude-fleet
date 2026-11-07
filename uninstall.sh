@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Remove everything install.sh added. Your sessions.toml and agent notes stay.
+# Remove everything install.sh added. Your ~/.config/claude-fleet/sessions.toml stays.
 # Running sessions keep running; stop them first with `fleet down`.
 set -euo pipefail
 REPO="$(cd "$(dirname "$0")" && pwd)"

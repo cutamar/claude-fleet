@@ -54,7 +54,7 @@ Optional: `fzf` (for `fleet pick`), `kitty` or `alacritty` (for the hotkey windo
 
 ### 1. Sessions that survive reboots
 
-Sessions are listed in `sessions.toml` (name, folder, options). `fleet up` starts each one as a
+Sessions are listed in `~/.config/claude-fleet/sessions.toml` (name, folder, options). `fleet up` starts each one as a
 Claude Code **background session** in its folder with:
 
 - **its name:** shown in the prompt, the session list and `/resume`
@@ -128,7 +128,10 @@ session or a terminal.
 | `fleet edit` | open `sessions.toml` |
 | `fleet logs <name>` | recent output |
 
-## Configuration: `sessions.toml`
+## Configuration: `~/.config/claude-fleet/sessions.toml`
+
+`fleet edit` opens it. Set `FLEET_CONFIG` to use another file. (Older versions kept it inside the
+repo; `install.sh` moves it.)
 
 ```toml
 [defaults]
@@ -170,7 +173,7 @@ fleet down && ~/claude-fleet/uninstall.sh
 ```
 
 This removes the link, the `fleet` plugin, the autostart entry or boot service, and the hotkey. Your
-`sessions.toml` stays. Linger is left on (other services may use it): `loginctl disable-linger` turns it off.
+`~/.config/claude-fleet/sessions.toml` stays. Linger is left on (other services may use it): `loginctl disable-linger` turns it off.
 
 ## Repository layout
 

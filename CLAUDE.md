@@ -12,7 +12,9 @@
   `uninstall.sh` in sync with anything the installer adds.
 - The dev team (agents, `/dev-team`, guard hooks, progress panel) lives in
   github.com/cutamar/claude-skills now; `install.sh` removes leftover links from older versions.
-- `sessions.toml` is personal and gitignored; `sessions.example.toml` is the template.
+- The sessions list lives at `~/.config/claude-fleet/sessions.toml` (`$FLEET_CONFIG` overrides;
+  a legacy `<repo>/sessions.toml` is still read until `install.sh` moves it).
+  `sessions.example.toml` is the template.
 - `systemd/claude-fleet.service` is a oneshot with `RemainAfterExit`; ExecStart/ExecStop are prefixed
   with `-` on purpose (a failed start must not make systemd kill the sessions that did start).
   `fleet up` holds `~/.local/state/claude-fleet/up.lock` so boot and login starts can't overlap.

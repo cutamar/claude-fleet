@@ -56,7 +56,7 @@ On Hyprland, options 1 and 2 also add the Super+Alt+C hotkey. For option 1, the 
 line to the user to run. Option 1 needs Claude Code's login in `~/.claude/.credentials.json`: check
 with `test -f ~/.claude/.credentials.json` (don't read it). If it's missing, recommend option 2.
 
-The installer creates `sessions.toml` from the example. Remove the example sessions from it and add
+The installer creates `~/.config/claude-fleet/sessions.toml` from the example. Remove the example sessions from it and add
 the user's:
 
 ```bash

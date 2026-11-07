@@ -1,4 +1,4 @@
-# Claude Fleet sessions.
+# Claude Fleet sessions: ~/.config/claude-fleet/sessions.toml (`fleet edit` opens it).
 # Each [[session]] is a named Claude Code session that runs in its folder.
 # `fleet up` starts every autostart session (Hyprland runs it at login) and
 # resumes the last conversation with that name. Add more with:

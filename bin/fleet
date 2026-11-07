@@ -21,7 +21,20 @@ from pathlib import Path
 
 HOME = Path.home()
 REPO = Path(__file__).resolve().parent.parent
-CONFIG = Path(os.environ.get("FLEET_CONFIG", REPO / "sessions.toml")).expanduser()
+CONFIG_HOME = Path(os.environ.get("XDG_CONFIG_HOME") or HOME / ".config") / "claude-fleet"
+LEGACY_CONFIG = REPO / "sessions.toml"  # before 2026-11: kept inside the repo
+
+
+def config_path() -> Path:
+    if os.environ.get("FLEET_CONFIG"):
+        return Path(os.environ["FLEET_CONFIG"]).expanduser()
+    new = CONFIG_HOME / "sessions.toml"
+    if not new.exists() and LEGACY_CONFIG.exists():
+        return LEGACY_CONFIG  # not migrated yet; ./install.sh moves it
+    return new
+
+
+CONFIG = config_path()
 STATE_DIR = HOME / ".local/state/claude-fleet"
 LOG = STATE_DIR / "fleet.log"
 CLAUDE = shutil.which("claude") or str(HOME / ".local/bin/claude")
@@ -57,7 +70,8 @@ def die(msg: str) -> None:
 
 def load_config() -> tuple[dict, list[dict]]:
     if not CONFIG.exists():
-        die(f"no sessions file at {CONFIG}\n  create it: cp {REPO}/sessions.example.toml {CONFIG}   (or run ./install.sh)")
+        die(f"no sessions file at {CONFIG}\n  create it: mkdir -p {CONFIG.parent} && "
+            f"cp {REPO}/sessions.example.toml {CONFIG}   (or run ./install.sh)")
     with CONFIG.open("rb") as f:
         data = tomllib.load(f)
     defaults = data.get("defaults", {})
