@@ -1,0 +1,203 @@
+#!/usr/bin/env python3
+"""fleet-mcp - MCP server (stdio) for managing Claude Fleet sessions.
+
+Exposes list/add/remove/start/stop/restart as MCP tools by running the `fleet`
+command next to this file, so the CLI stays the single source of truth.
+Register it with:  claude mcp add --scope user fleet -- ~/.local/bin/fleet-mcp
+"""
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+FLEET = Path(__file__).resolve().parent / "fleet"
+SERVER_INFO = {"name": "claude-fleet", "version": "1.0.0"}
+DEFAULT_PROTOCOL = "2025-06-18"
+
+NAMES = {"type": "array", "items": {"type": "string"}}
+
+TOOLS = [
+    {
+        "name": "list_sessions",
+        "description": "List the Claude Fleet sessions from sessions.toml with their folder, "
+                       "options and live state (running/stopped, status, id).",
+        "inputSchema": {"type": "object", "properties": {}},
+        "annotations": {"readOnlyHint": True},
+    },
+    {
+        "name": "add_session",
+        "description": "Add a named session to sessions.toml. The folder must exist and should be "
+                       "trusted (run `claude` there once). Set start=true to start it right away.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "letters, digits, . _ -"},
+                "dir": {"type": "string", "description": "project folder (~ allowed)"},
+                "model": {"type": "string", "description": "opus | sonnet | haiku | full model id"},
+                "effort": {"type": "string", "enum": ["low", "medium", "high", "xhigh", "max"]},
+                "autostart": {"type": "boolean", "default": True,
+                              "description": "start at boot/login with `fleet up`"},
+                "start": {"type": "boolean", "default": False},
+            },
+            "required": ["name", "dir"],
+        },
+    },
+    {
+        "name": "remove_session",
+        "description": "Remove a session from sessions.toml. Its saved conversations are kept. "
+                       "Fails if it is running unless stop=true.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "stop": {"type": "boolean", "default": False,
+                         "description": "stop the session first if it is running"},
+            },
+            "required": ["name"],
+        },
+        "annotations": {"destructiveHint": True},
+    },
+    {
+        "name": "start_sessions",
+        "description": "Start sessions in the background, resuming each one's last conversation. "
+                       "With no names, starts every autostart session. Running ones are left alone.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "names": {**NAMES, "description": "sessions to start (default: all autostart)"},
+                "fresh": {"type": "boolean", "default": False,
+                          "description": "start new conversations instead of resuming"},
+            },
+        },
+    },
+    {
+        "name": "stop_sessions",
+        "description": "Stop running sessions (the conversation is kept and resumed next start). "
+                       "Stopping the session you are talking from ends this conversation.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"names": {**NAMES, "minItems": 1}},
+            "required": ["names"],
+        },
+        "annotations": {"destructiveHint": True},
+    },
+    {
+        "name": "restart_sessions",
+        "description": "Stop and start sessions again, resuming their conversations.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"names": {**NAMES, "minItems": 1}},
+            "required": ["names"],
+        },
+        "annotations": {"destructiveHint": True},
+    },
+]
+
+
+class ToolError(Exception):
+    pass
+
+
+def fleet(*args: str, timeout: int = 300) -> str:
+    try:
+        r = subprocess.run([sys.executable, str(FLEET), *args], capture_output=True, text=True,
+                           timeout=timeout, stdin=subprocess.DEVNULL)
+    except subprocess.TimeoutExpired:
+        raise ToolError(f"`fleet {' '.join(args)}` timed out after {timeout}s")
+    out = "\n".join(x for x in (r.stdout.strip(), r.stderr.strip()) if x)
+    if r.returncode != 0:
+        raise ToolError(out or f"`fleet {' '.join(args)}` failed ({r.returncode})")
+    return out or "ok"
+
+
+def names_arg(a: dict, required: bool) -> list[str]:
+    names = a.get("names") or []
+    if not isinstance(names, list) or not all(isinstance(n, str) and n for n in names):
+        raise ToolError("names must be a list of session names")
+    if required and not names:
+        raise ToolError("give at least one session name")
+    # Names are passed after "--" so a name can never be read as a flag.
+    return names
+
+
+def call_tool(name: str, a: dict) -> str:
+    if name == "list_sessions":
+        return fleet("ls", "--json", timeout=60)
+    if name == "add_session":
+        cmd = ["add"]
+        for key in ("model", "effort"):
+            if a.get(key):
+                cmd += [f"--{key}", str(a[key])]
+        if a.get("autostart") is False:
+            cmd.append("--no-autostart")
+        if a.get("start"):
+            cmd.append("--start")
+        return fleet(*cmd, "--", str(a.get("name", "")), str(a.get("dir", "")))
+    if name == "remove_session":
+        cmd = ["rm"] + (["--stop"] if a.get("stop") else [])
+        return fleet(*cmd, "--", str(a.get("name", "")))
+    if name == "start_sessions":
+        cmd = ["up"] + (["--fresh"] if a.get("fresh") else [])
+        return fleet(*cmd, "--", *names_arg(a, required=False))
+    if name == "stop_sessions":
+        return fleet("down", "--", *names_arg(a, required=True))
+    if name == "restart_sessions":
+        return fleet("restart", "--", *names_arg(a, required=True))
+    raise KeyError(name)
+
+
+def handle(msg: dict) -> dict | None:
+    method, mid, params = msg.get("method"), msg.get("id"), msg.get("params") or {}
+    if mid is None:  # notification (e.g. notifications/initialized): no reply
+        return None
+
+    def ok(result: dict) -> dict:
+        return {"jsonrpc": "2.0", "id": mid, "result": result}
+
+    def err(code: int, message: str) -> dict:
+        return {"jsonrpc": "2.0", "id": mid, "error": {"code": code, "message": message}}
+
+    if method == "initialize":
+        return ok({
+            "protocolVersion": params.get("protocolVersion") or DEFAULT_PROTOCOL,
+            "capabilities": {"tools": {}},
+            "serverInfo": SERVER_INFO,
+            "instructions": "Manage Claude Fleet: named, always-on Claude Code background "
+                            "sessions defined in sessions.toml. Call list_sessions first to see "
+                            "names and state.",
+        })
+    if method == "ping":
+        return ok({})
+    if method == "tools/list":
+        return ok({"tools": TOOLS})
+    if method == "tools/call":
+        tool, a = params.get("name"), params.get("arguments") or {}
+        try:
+            text, is_error = call_tool(tool, a), False
+        except KeyError:
+            return err(-32602, f"unknown tool: {tool}")
+        except ToolError as e:
+            text, is_error = str(e), True
+        return ok({"content": [{"type": "text", "text": text}], "isError": is_error})
+    return err(-32601, f"method not found: {method}")
+
+
+def main() -> None:
+    for line in sys.stdin:
+        if not line.strip():
+            continue
+        try:
+            msg = json.loads(line)
+        except json.JSONDecodeError:
+            reply = {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "parse error"}}
+        else:
+            reply = handle(msg) if isinstance(msg, dict) else None
+        if reply is not None:
+            sys.stdout.write(json.dumps(reply) + "\n")
+            sys.stdout.flush()
+
+
+if __name__ == "__main__":
+    main()

@@ -8,15 +8,18 @@
 #   --systemd        start sessions at boot, before you log in (systemd user service + linger);
 #                    replaces the login autostart (the Hyprland hotkey stays)
 #   --no-autostart   skip all autostart / hotkey setup
+#   --no-mcp         don't register the `fleet` MCP server (manage sessions from any Claude chat)
 set -euo pipefail
 REPO="$(cd "$(dirname "$0")" && pwd)"
 AUTOSTART=1
 SYSTEMD=0
+MCP=1
 for arg in "$@"; do
   case "$arg" in
     --no-autostart) AUTOSTART=0 ;;
     --systemd) SYSTEMD=1 ;;
-    -h|--help) sed -n '2,11p' "$0"; exit 0 ;;
+    --no-mcp) MCP=0 ;;
+    -h|--help) sed -n '2,12p' "$0"; exit 0 ;;
     *) echo "unknown option: $arg" >&2; exit 2 ;;
   esac
 done
@@ -37,8 +40,9 @@ link() {  # link SRC DEST, refusing to overwrite a real file
 }
 
 mkdir -p "$HOME/.local/bin" "$HOME/.claude/agents" "$HOME/.claude/skills"
-chmod +x "$REPO/bin/fleet" "$REPO"/hooks/*.sh
+chmod +x "$REPO/bin/fleet" "$REPO/bin/fleet-mcp" "$REPO"/hooks/*.sh
 link "$REPO/bin/fleet" "$HOME/.local/bin/fleet"
+link "$REPO/bin/fleet-mcp" "$HOME/.local/bin/fleet-mcp"
 link "$REPO/hooks" "$HOME/.claude/fleet-hooks"
 for f in "$REPO"/agents/*.md; do link "$f" "$HOME/.claude/agents/$(basename "$f")"; done
 link "$REPO/skills/dev-team" "$HOME/.claude/skills/dev-team"
@@ -102,6 +106,16 @@ NoDisplay=true
 EOF
     echo "new:  ~/.config/autostart/claude-fleet.desktop (starts sessions at login)"
     echo "tip:  bind a key to 'fleet ui' in your desktop's keyboard settings to open the switcher"
+  fi
+fi
+
+if [ "$MCP" = 1 ]; then
+  if claude mcp get fleet >/dev/null 2>&1; then
+    echo "ok:   MCP server 'fleet' already registered"
+  elif claude mcp add --scope user fleet -- "$HOME/.local/bin/fleet-mcp" >/dev/null 2>&1; then
+    echo "on:   MCP server 'fleet' (user scope): manage sessions from any Claude chat"
+  else
+    echo "todo: register the MCP server: claude mcp add --scope user fleet -- $HOME/.local/bin/fleet-mcp"
   fi
 fi
 

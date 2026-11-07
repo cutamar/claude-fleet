@@ -1,6 +1,8 @@
 # Claude Fleet: notes for Claude working on this repo
 
-- `bin/fleet` must stay stdlib-only Python 3.11+ (it runs at login, outside any venv).
+- `bin/fleet` and `bin/fleet-mcp` must stay stdlib-only Python 3.11+ (they run at login / from
+  Claude, outside any venv). `fleet-mcp` only shells out to `fleet` (names after `--`); put new
+  behavior in `fleet` and expose it as a tool, never duplicate logic in the server.
 - Running sessions come from `claude agents --json`; sessions are matched by `name`. Never kill
   `claude` processes directly. Use `claude stop/respawn <id>`.
 - Resuming an empty session (no user message) silently creates a new id, so `last_session_id`

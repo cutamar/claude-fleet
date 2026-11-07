@@ -101,6 +101,9 @@ Tell the user, briefly:
 - `fleet` (or Super+Alt+C on Hyprland) opens the session switcher. `Space` peeks, `Enter` opens,
   `←` goes back.
 - `/dev-team <task>` runs the agent team in any session.
+- The installer registered a `fleet` MCP server, so they can also just ask Claude in any chat to list,
+  add, remove, start, stop or restart sessions. New Claude sessions pick it up; running ones need
+  `fleet respawn`.
 - Sessions that were already running need `fleet respawn` (or a restart) to see the new agents.
 - `fleet down && ~/claude-fleet/uninstall.sh` removes everything.
 

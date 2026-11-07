@@ -25,7 +25,7 @@ CONFIG = Path(os.environ.get("FLEET_CONFIG", REPO / "sessions.toml")).expanduser
 STATE_DIR = HOME / ".local/state/claude-fleet"
 LOG = STATE_DIR / "fleet.log"
 CLAUDE = shutil.which("claude") or str(HOME / ".local/bin/claude")
-NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 UI_CLASS = "claude-fleet"
 BOOT = False  # set by `up --boot`: log to file and send desktop notifications
 
@@ -67,7 +67,7 @@ def load_config() -> tuple[dict, list[dict]]:
         s = {**defaults, **raw}
         name = s.get("name", "")
         if not NAME_RE.match(name):
-            die(f"invalid session name {name!r} (use letters, digits, . _ -)")
+            die(f"invalid session name {name!r} (use letters, digits, . _ -; start with a letter or digit)")
         if name in seen:
             die(f"duplicate session name {name!r}")
         seen.add(name)
@@ -276,6 +276,22 @@ def cmd_respawn(args) -> None:
 def cmd_ls(args) -> None:
     _, sessions = load_config()
     live = running()
+    if getattr(args, "json", False):
+        out = []
+        for s in sessions:
+            lv = live_for(s["name"], live)
+            out.append({
+                "name": s["name"], "dir": s["dir"], "autostart": s["autostart"],
+                "model": s.get("model"), "effort": s.get("effort"), "agent": s.get("agent"),
+                "permission_mode": s["permission_mode"], "remote_control": s["remote_control"],
+                "trusted": is_trusted(s["dir"]),
+                "running": bool(lv),
+                "status": lv[0].get("status") if lv else "stopped",
+                "kind": lv[0].get("kind") if lv else None,
+                "id": (lv[0].get("id") or lv[0].get("pid")) if lv else None,
+            })
+        print(json.dumps(out, indent=2))
+        return
     rows = [("NAME", "STATE", "AUTO", "MODEL", "FOLDER")]
     for s in sessions:
         lv = live_for(s["name"], live)
@@ -351,7 +367,7 @@ def toml_str(v: str) -> str:
 
 def cmd_add(args) -> None:
     if not NAME_RE.match(args.name):
-        die("name may only contain letters, digits, . _ -")
+        die("name may only contain letters, digits, . _ - and must start with a letter or digit")
     _, sessions = load_config()
     if any(s["name"] == args.name for s in sessions):
         die(f"{args.name} already exists in {CONFIG}")
@@ -372,6 +388,70 @@ def cmd_add(args) -> None:
         print(f"note: folder isn't trusted yet - run `claude` once in {shown} and accept the prompt")
     if args.start:
         cmd_up(argparse.Namespace(names=[args.name], boot=False, fresh=False))
+
+
+SESSION_HEADER = re.compile(r"^\s*\[\[\s*session\s*\]\]\s*(#.*)?$")
+SESSION_SUBTABLE = re.compile(r"^\s*\[+\s*session\s*\.")
+TABLE_HEADER = re.compile(r"^\s*\[")
+
+
+def is_comment_or_blank(line: str) -> bool:
+    return not line.strip() or line.lstrip().startswith("#")
+
+
+def remove_session_block(text: str, name: str) -> str | None:
+    """Return `text` without the [[session]] block named `name` (None if not found).
+
+    A block runs from its header (plus the comment lines right above it) to the next table
+    header that isn't one of its own [session.x] sub-tables. Comments just before that next
+    header stay, since they usually describe what follows."""
+    lines = text.splitlines(keepends=True)
+    headers = [i for i, l in enumerate(lines) if TABLE_HEADER.match(l)]
+    for n, start in enumerate(headers):
+        if not SESSION_HEADER.match(lines[start]):
+            continue
+        ends = [h for h in headers[n + 1:] if not SESSION_SUBTABLE.match(lines[h])]
+        end = ends[0] if ends else len(lines)
+        try:
+            body = tomllib.loads("".join(lines[start + 1:end]))
+        except tomllib.TOMLDecodeError:
+            continue
+        if body.get("name") != name:
+            continue
+        while end > start + 1 and is_comment_or_blank(lines[end - 1]):
+            end -= 1
+        while start > 0 and lines[start - 1].lstrip().startswith("#"):
+            start -= 1
+        if start > 0 and not lines[start - 1].strip():
+            start -= 1
+        return "".join(lines[:start] + lines[end:])
+    return None
+
+
+def cmd_rm(args) -> None:
+    _, sessions = load_config()
+    s = select(sessions, [args.name])[0]
+    bg = [a for a in live_for(s["name"], running()) if a.get("kind") == "background"]
+    if bg and not args.stop:
+        die(f"{args.name} is running; stop it first (`fleet down {args.name}`) or pass --stop")
+    text = CONFIG.read_text()
+    new = remove_session_block(text, args.name)
+    if new is None:
+        die(f"could not find the [[session]] block for {args.name} in {CONFIG}; remove it with `fleet edit`")
+    # Make sure only that one session disappeared before writing.
+    before = tomllib.loads(text)
+    after = tomllib.loads(new)
+    before["session"] = [x for x in before.get("session", []) if x.get("name") != args.name]
+    after.setdefault("session", [])
+    if after != before:
+        die(f"refusing to edit {CONFIG}: removing {args.name} would change other entries")
+    if bg:
+        cmd_down(argparse.Namespace(names=[args.name]))
+    target = CONFIG.resolve()  # keep a symlinked sessions.toml a symlink
+    tmp = target.with_name(target.name + ".tmp")
+    tmp.write_text(new)
+    tmp.replace(target)
+    print(f"removed {args.name} from {CONFIG} (its conversations are kept)")
 
 
 MEM_WARN = 180  # Claude loads only the first 200 lines of an agent's MEMORY.md
@@ -455,7 +535,9 @@ def main() -> None:
     a.add_argument("names", nargs="*")
     a.set_defaults(fn=cmd_respawn)
 
-    sub.add_parser("ls", help="show configured sessions and their state").set_defaults(fn=cmd_ls)
+    a = sub.add_parser("ls", help="show configured sessions and their state")
+    a.add_argument("--json", action="store_true", help="machine-readable output")
+    a.set_defaults(fn=cmd_ls)
     sub.add_parser("ui", help="open Claude's agent view to switch between sessions").set_defaults(fn=cmd_ui)
     sub.add_parser("pick", help="fzf picker over configured sessions").set_defaults(fn=cmd_pick)
 
@@ -475,6 +557,11 @@ def main() -> None:
     a.add_argument("--effort")
     a.add_argument("--start", action="store_true", help="start it right away")
     a.set_defaults(fn=cmd_add)
+
+    a = sub.add_parser("rm", help="remove a session from sessions.toml (conversations are kept)")
+    a.add_argument("name")
+    a.add_argument("--stop", action="store_true", help="stop it first if it is running")
+    a.set_defaults(fn=cmd_rm)
 
     a = sub.add_parser("memory", help="list agent memory files (sizes), or `sync` notes back from worktrees")
     a.add_argument("action", nargs="?", choices=["list", "sync"], default="list")

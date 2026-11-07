@@ -14,6 +14,10 @@ if [ -f "$HOME/.config/systemd/user/claude-fleet.service" ]; then
   echo "removed: systemd user service claude-fleet (linger left as is; turn off with: loginctl disable-linger $USER)"
 fi
 unlink_if_ours "$HOME/.local/bin/fleet"
+unlink_if_ours "$HOME/.local/bin/fleet-mcp"
+if command -v claude >/dev/null && claude mcp get fleet 2>/dev/null | grep -qF "fleet-mcp"; then
+  claude mcp remove --scope user fleet >/dev/null 2>&1 && echo "removed: MCP server 'fleet'"
+fi
 unlink_if_ours "$HOME/.claude/fleet-hooks"
 for f in "$REPO"/agents/*.md; do unlink_if_ours "$HOME/.claude/agents/$(basename "$f")"; done
 unlink_if_ours "$HOME/.claude/skills/dev-team"

@@ -132,7 +132,25 @@ Built on conventions from [obra/superpowers](https://github.com/obra/superpowers
 - Workers can't spawn their own subagents, every agent has a turn cap, and every subagent call names
   its model, so nothing silently runs on Opus.
 
-### 5. Live progress panel (optional mod)
+### 5. Manage sessions from any chat (MCP server)
+
+The installer registers a `fleet` MCP server (user scope), so you can manage the fleet by just asking
+Claude, in any session or from your phone: *"add a session for ~/code/api on sonnet and start it"*,
+*"stop website"*, *"which sessions are running?"*.
+
+| Tool | Does |
+|---|---|
+| `list_sessions` | configured sessions with folder, options and live state |
+| `add_session` | add one (name, folder, model, effort, autostart), optionally start it |
+| `remove_session` | remove one from `sessions.toml`; `stop: true` stops it first. Conversations are kept |
+| `start_sessions` / `stop_sessions` / `restart_sessions` | same as `fleet up` / `down` / `restart` |
+
+The server (`bin/fleet-mcp`, stdlib Python) just runs the `fleet` command, so the CLI and the tools
+always agree. Skip it with `install.sh --no-mcp`, or register it by hand:
+`claude mcp add --scope user fleet -- ~/.local/bin/fleet-mcp`. Stopping the session you are chatting
+from ends that chat.
+
+### 6. Live progress panel (optional mod)
 
 The `dev-team-view` mod adds a panel beside the chat that follows the current run, plus a one-line
 summary above the prompt:
@@ -165,12 +183,13 @@ It opens by itself when a run starts. Open it any time with `/dev-team-view`.
 | `fleet` / `fleet ui` | agent view: list, peek, open sessions |
 | `fleet pick` | fuzzy picker over your configured sessions; starts a stopped one and opens it |
 | `fleet attach <name>` | open one session in this terminal (starts it if needed) |
-| `fleet ls` | your sessions and their state |
+| `fleet ls [--json]` | your sessions and their state |
 | `fleet up [names]` | start autostart sessions (or the named ones), resuming each; `--fresh` starts new conversations |
 | `fleet down [names]` | stop sessions (the conversation is kept and resumed next time) |
 | `fleet restart [names]` | stop + start |
 | `fleet respawn [names]` | move running sessions onto a new Claude Code version after `claude update` |
 | `fleet add <name> <dir> [--model m] [--no-autostart] [--start]` | add a session |
+| `fleet rm <name> [--stop]` | remove a session from `sessions.toml` (its conversations are kept) |
 | `fleet edit` | open `sessions.toml` |
 | `fleet logs <name>` | recent output |
 | `fleet memory` / `fleet memory sync [repo]` | agent notes sizes / copy notes back from worktree runs |
@@ -216,7 +235,7 @@ untrusted folders.
 fleet down && ~/claude-fleet/uninstall.sh
 ```
 
-This removes the links, the autostart entry or boot service, and the hotkey. Your `sessions.toml` and
+This removes the links, the MCP server, the autostart entry or boot service, and the hotkey. Your `sessions.toml` and
 agent notes stay. Linger is left on (other services may use it): `loginctl disable-linger` turns it off.
 Remove the panel with `/plugin uninstall dev-team-view`.
 
@@ -224,6 +243,7 @@ Remove the panel with `/plugin uninstall dev-team-view`.
 
 ```text
 bin/fleet                     the session manager (Python, stdlib only)
+bin/fleet-mcp                 MCP server exposing fleet as tools (Python, stdlib only)
 agents/                       dev-team subagent definitions
 skills/dev-team/SKILL.md      the /dev-team orchestration workflow
 hooks/                        read-only and memory-file guards (+ test.sh)
