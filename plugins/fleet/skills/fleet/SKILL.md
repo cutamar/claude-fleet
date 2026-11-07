@@ -27,7 +27,9 @@ Rules:
 - `$CLAUDE_CODE_SESSION_ID` starts with the id of the session you are in (the id `fleet ls`
   shows). Stopping that session ends this conversation, so say so before doing it. `fleet restart`
   refuses to restart it; the user has to do that from another session or a terminal.
-- A new folder must be trusted once: if `fleet` says it isn't, tell the user to run `claude` there
-  and accept the prompt. You can't do it for them.
+- A new folder must be trusted once: if `fleet` says it isn't, tell the user to run
+  `! fleet trust <name>` (or `claude` there and accept the prompt). Don't run `fleet trust` yourself:
+  trusting a folder is the user's call. `auto_trust` in `[defaults]` makes `fleet` trust folders
+  under the listed parents automatically.
 - The user can also use the quick commands `/fleet:status`, `/fleet:add`, `/fleet:remove`,
   `/fleet:start`, `/fleet:stop` and `/fleet:restart`.

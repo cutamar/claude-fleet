@@ -69,8 +69,9 @@ If `fleet` isn't found, `~/.local/bin` isn't on PATH: tell the user to add it, a
 
 ## 5. Trust and start
 
-`fleet ls` marks folders as `[untrusted]`. For each one, tell the user to run `claude` once in that
-folder and accept the trust prompt. You can't do this for them.
+`fleet ls` marks folders as `[untrusted]`. For each one, tell the user to run `fleet trust <name>`
+(or `claude` once in that folder and accept the prompt). Let them run it: trusting is their call.
+If all their projects live under one folder, mention `auto_trust` in `[defaults]` (see README).
 
 Then start the sessions and show the result:
 

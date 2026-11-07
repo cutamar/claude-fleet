@@ -12,14 +12,20 @@
 #   permission_mode auto | default | acceptEdits | plan   (default "auto")
 #   remote_control  true/false - reachable from claude.ai/code and the mobile app (default true)
 #   args            extra claude CLI flags, e.g. ["--add-dir", "~/shared"]
-# A folder must be trusted once: run `claude` in it and accept the prompt.
+# A folder must be trusted once: `fleet trust <name>`, or run `claude` in it and accept the prompt.
+#
+# [defaults] only:
+#   auto_trust      folders whose subfolders fleet may trust for you, e.g. ["~/Projects"].
+#                   Only list folders that hold your own code: trusting lets a repo's
+#                   .claude settings, hooks and MCP servers run.
 
 [defaults]
 permission_mode = "auto"
 remote_control = true
+# auto_trust = ["~/Projects"]
 
 # One entry per session. The folder must exist and be trusted once
-# (run `claude` there and accept the prompt).
+# (`fleet trust <name>`, or run `claude` there and accept the prompt).
 
 [[session]]
 name = "my-app"

@@ -125,6 +125,7 @@ session or a terminal.
 | `fleet respawn [names]` | move running sessions onto a new Claude Code version after `claude update` |
 | `fleet add <name> <dir> [--model m] [--no-autostart] [--start]` | add a session |
 | `fleet rm <name> [--stop]` | remove a session from `sessions.toml` (its conversations are kept) |
+| `fleet trust <name...>` | trust sessions' folders so Claude starts there without the prompt |
 | `fleet edit` | open `sessions.toml` |
 | `fleet logs <name>` | recent output |
 
@@ -148,8 +149,20 @@ autostart = true
 # args = ["--add-dir", "~/shared"]
 ```
 
-Each folder must be **trusted** once: run `claude` in it and accept the prompt. `fleet ls` marks
-untrusted folders.
+Each folder must be **trusted** once: run `fleet trust <name>`, or run `claude` in it and accept the
+prompt. `fleet ls` marks untrusted folders. A trusted parent folder doesn't cover a subfolder that is
+its own git repo, so new repos under a trusted `~/Projects` still need this.
+
+To skip that step for your own code, list the parent folders in `[defaults]`:
+
+```toml
+[defaults]
+auto_trust = ["~/Projects"]
+```
+
+`fleet up` and `fleet add` then trust any session folder under them. Trusting lets a repo's
+`.claude` settings, hooks and MCP servers run, so don't list folders where you clone code you
+haven't read.
 
 ## Troubleshooting
 

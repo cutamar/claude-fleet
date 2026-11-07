@@ -123,16 +123,74 @@ def is_self(agent: dict) -> bool:
     return bool(aid) and sid.startswith(aid)
 
 
+CLAUDE_JSON = HOME / ".claude.json"
+
+
+def git_root(p: Path) -> Path | None:
+    for cand in [p, *p.parents]:
+        if (cand / ".git").exists():
+            return cand
+    return None
+
+
 def is_trusted(directory: str) -> bool:
+    """Whether Claude will start in `directory` without the trust prompt.
+
+    A trusted parent folder covers plain subfolders, but a folder inside its own git repo
+    asks again: only the repo root (or a folder inside it) being trusted counts there.
+    """
     try:
-        projects = json.loads((HOME / ".claude.json").read_text()).get("projects", {})
+        projects = json.loads(CLAUDE_JSON.read_text()).get("projects", {})
     except (OSError, json.JSONDecodeError):
         return False
     p = Path(directory)
     if p == HOME:  # Claude only trusts $HOME one interactive session at a time
         return False
+    root = git_root(p)
+    stop = root.parent if root else None
     for cand in [p, *p.parents]:
+        if cand == stop:
+            break
         if projects.get(str(cand), {}).get("hasTrustDialogAccepted"):
+            return True
+    return False
+
+
+def trust(directory: str) -> bool:
+    """Mark `directory` (its git repo root, if it has one) as trusted in ~/.claude.json."""
+    p = Path(directory)
+    key = str(git_root(p) or p)
+    for _ in range(3):  # running Claude sessions rewrite this file too; re-check after writing
+        try:
+            data = json.loads(CLAUDE_JSON.read_text())
+        except (OSError, json.JSONDecodeError):
+            return False
+        data.setdefault("projects", {}).setdefault(key, {})["hasTrustDialogAccepted"] = True
+        tmp = CLAUDE_JSON.with_name(f".claude.json.fleet-{os.getpid()}")
+        tmp.write_text(json.dumps(data, indent=2))
+        os.chmod(tmp, CLAUDE_JSON.stat().st_mode & 0o777)
+        os.replace(tmp, CLAUDE_JSON)
+        time.sleep(0.2)
+        if is_trusted(directory):
+            return True
+    return False
+
+
+def auto_trust_roots(defaults: dict) -> list[Path]:
+    roots = defaults.get("auto_trust", [])
+    if isinstance(roots, str):
+        roots = [roots]
+    return [Path(r).expanduser().resolve() for r in roots]
+
+
+def ensure_trusted(directory: str, defaults: dict) -> bool:
+    """True if trusted, trusting it first when it sits under an `auto_trust` folder."""
+    if is_trusted(directory):
+        return True
+    p = Path(directory)
+    if p != HOME and any(p == r or r in p.parents for r in auto_trust_roots(defaults)):
+        if trust(directory):
+            log(f"~ trusted {directory} (auto_trust)")
             return True
     return False
 
@@ -221,7 +279,7 @@ def cmd_up(args) -> None:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     lock = (STATE_DIR / "up.lock").open("w")
     fcntl.flock(lock, fcntl.LOCK_EX)
-    _, sessions = load_config()
+    defaults, sessions = load_config()
     targets = select(sessions, args.names)
     if not args.names:
         targets = [s for s in targets if s["autostart"]]
@@ -240,9 +298,9 @@ def cmd_up(args) -> None:
         if not Path(s["dir"]).is_dir():
             problems.append(f"{name}: folder missing ({s['dir']})")
             continue
-        if not is_trusted(s["dir"]):
-            problems.append(f"{name}: folder not trusted - run `claude` once in {s['dir']} "
-                            "and accept the trust prompt")
+        if not ensure_trusted(s["dir"], defaults):
+            problems.append(f"{name}: folder not trusted - run `fleet trust {name}`, or "
+                            f"`claude` once in {s['dir']} and accept the trust prompt")
             continue
         rid = None if args.fresh else last_session_id(name, s["dir"])
         r = subprocess.run(build_cmd(s, rid), cwd=s["dir"], capture_output=True, text=True,
@@ -403,6 +461,24 @@ def cmd_logs(args) -> None:
     os.execv(CLAUDE, [CLAUDE, "logs", bg[0]["id"]])
 
 
+def cmd_trust(args) -> None:
+    _, sessions = load_config()
+    failed = False
+    for s in select(sessions, args.names):
+        if is_trusted(s["dir"]):
+            print(f"= {s['name']}: already trusted")
+        elif Path(s["dir"]) == HOME:
+            print(f"! {s['name']}: Claude never saves trust for your home folder")
+            failed = True
+        elif trust(s["dir"]):
+            print(f"+ {s['name']}: trusted {s['dir']}")
+        else:
+            print(f"! {s['name']}: couldn't update ~/.claude.json")
+            failed = True
+    if failed:
+        sys.exit(1)
+
+
 def toml_str(v: str) -> str:
     return json.dumps(v)  # JSON string escaping is valid TOML basic-string escaping
 
@@ -410,7 +486,7 @@ def toml_str(v: str) -> str:
 def cmd_add(args) -> None:
     if not NAME_RE.match(args.name):
         die("name may only contain letters, digits, . _ - and must start with a letter or digit")
-    _, sessions = load_config()
+    defaults, sessions = load_config()
     if any(s["name"] == args.name for s in sessions):
         die(f"{args.name} already exists in {CONFIG}")
     d = Path(args.dir).expanduser().resolve()
@@ -426,8 +502,9 @@ def cmd_add(args) -> None:
     with CONFIG.open("a") as f:
         f.write("\n".join(block) + "\n")
     print(f"added {args.name} -> {shown}")
-    if not is_trusted(str(d)):
-        print(f"note: folder isn't trusted yet - run `claude` once in {shown} and accept the prompt")
+    if not ensure_trusted(str(d), defaults):
+        print(f"note: folder isn't trusted yet - run `fleet trust {args.name}`, or `claude` once "
+              f"in {shown} and accept the prompt")
     if args.start:
         cmd_up(argparse.Namespace(names=[args.name], boot=False, fresh=False))
 
@@ -551,6 +628,10 @@ def main() -> None:
     a.add_argument("name")
     a.add_argument("--stop", action="store_true", help="stop it first if it is running")
     a.set_defaults(fn=cmd_rm)
+
+    a = sub.add_parser("trust", help="trust sessions' folders so Claude starts there without asking")
+    a.add_argument("names", nargs="+")
+    a.set_defaults(fn=cmd_trust)
 
     sub.add_parser("edit", help="open sessions.toml in $EDITOR").set_defaults(fn=cmd_edit)
 
