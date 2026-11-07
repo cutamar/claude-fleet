@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """fleet-mcp - MCP server (stdio) for managing Claude Fleet sessions.
 
-Exposes list/add/remove/start/stop/restart as MCP tools by running the `fleet`
-command next to this file, so the CLI stays the single source of truth.
+Exposes list/add/remove/start/stop/restart as MCP tools (plus matching prompts,
+which Claude Code shows as slash commands) by running the `fleet` command next
+to this file, so the CLI stays the single source of truth.
 Register it with:  claude mcp add --scope user fleet -- ~/.local/bin/fleet-mcp
 """
 from __future__ import annotations
@@ -96,6 +97,72 @@ TOOLS = [
 ]
 
 
+# Prompts show up as slash commands in Claude Code. Each one names the exact tool to
+# call, so "session" can't be mistaken for something else.
+PROMPTS = [
+    {"name": "status", "description": "Show Claude Fleet sessions and whether they are running",
+     "arguments": []},
+    {"name": "add", "description": "Add a Claude Fleet session and start it",
+     "arguments": [
+         {"name": "name", "description": "session name", "required": True},
+         {"name": "dir", "description": "project folder", "required": True},
+         {"name": "model", "description": "opus | sonnet | haiku (optional)", "required": False},
+     ]},
+    {"name": "remove", "description": "Remove a Claude Fleet session (stops it first; conversations are kept)",
+     "arguments": [{"name": "name", "description": "session name", "required": True}]},
+    {"name": "start", "description": "Start Claude Fleet sessions (default: all autostart ones)",
+     "arguments": [{"name": "names", "description": "session names, space separated (optional)",
+                    "required": False}]},
+    {"name": "stop", "description": "Stop Claude Fleet sessions",
+     "arguments": [{"name": "names", "description": "session names, space separated",
+                    "required": True}]},
+    {"name": "restart", "description": "Restart Claude Fleet sessions (resumes their conversations)",
+     "arguments": [{"name": "names", "description": "session names, space separated",
+                    "required": True}]},
+]
+
+CONTEXT = ("A \"session\" here means a Claude Fleet session: a named Claude Code background session "
+           "listed in sessions.toml and managed by the `fleet` MCP server. ")
+
+
+def split_names(v: object) -> list[str]:
+    return [n for n in str(v or "").replace(",", " ").split() if n]
+
+
+def prompt_text(name: str, a: dict) -> str:
+    if name == "status":
+        try:
+            live = fleet("ls", "--json", timeout=60)
+        except ToolError as e:
+            live = f"(could not read sessions: {e})"
+        return (CONTEXT + "Here is the current state from `fleet ls --json`. Show it as a short "
+                "table (name, state, model, folder) and point out anything stopped or untrusted. "
+                "Don't call any tools.\n\n" + live)
+    if name == "add":
+        args = {"name": str(a.get("name") or "").strip(), "dir": str(a.get("dir") or "").strip(),
+                "start": True}
+        if str(a.get("model") or "").strip():
+            args["model"] = str(a["model"]).strip()
+        if not args["name"] or not args["dir"]:
+            return CONTEXT + "Ask me for the session name and folder, then call `add_session` with start=true."
+        return (CONTEXT + f"Call the `add_session` tool with {json.dumps(args)}. If the folder isn't "
+                "trusted, tell me to run `claude` in it once. Report the result in one or two lines.")
+    if name == "remove":
+        n = str(a.get("name") or "").strip()
+        if not n:
+            return CONTEXT + "Call `list_sessions`, then ask me which session to remove."
+        return (CONTEXT + f"Call the `remove_session` tool with {json.dumps({'name': n, 'stop': True})}. "
+                "Report the result in one line.")
+    names = split_names(a.get("names"))
+    tool = {"start": "start_sessions", "stop": "stop_sessions", "restart": "restart_sessions"}[name]
+    if not names and name != "start":
+        return CONTEXT + f"Call `list_sessions`, then ask me which session(s) to {name}."
+    hint = (" If one of them is the session you are running in, warn me first that this ends "
+            "our conversation." if name != "start" else "")
+    return (CONTEXT + f"Call the `{tool}` tool with {json.dumps({'names': names})}.{hint} "
+            "Report the result in one or two lines.")
+
+
 class ToolError(Exception):
     pass
 
@@ -162,7 +229,7 @@ def handle(msg: dict) -> dict | None:
     if method == "initialize":
         return ok({
             "protocolVersion": params.get("protocolVersion") or DEFAULT_PROTOCOL,
-            "capabilities": {"tools": {}},
+            "capabilities": {"tools": {}, "prompts": {}},
             "serverInfo": SERVER_INFO,
             "instructions": "Manage Claude Fleet: named, always-on Claude Code background "
                             "sessions defined in sessions.toml. Call list_sessions first to see "
@@ -172,6 +239,15 @@ def handle(msg: dict) -> dict | None:
         return ok({})
     if method == "tools/list":
         return ok({"tools": TOOLS})
+    if method == "prompts/list":
+        return ok({"prompts": PROMPTS})
+    if method == "prompts/get":
+        pname = params.get("name")
+        if pname not in {p["name"] for p in PROMPTS}:
+            return err(-32602, f"unknown prompt: {pname}")
+        text = prompt_text(pname, params.get("arguments") or {})
+        return ok({"description": next(p["description"] for p in PROMPTS if p["name"] == pname),
+                   "messages": [{"role": "user", "content": {"type": "text", "text": text}}]})
     if method == "tools/call":
         tool, a = params.get("name"), params.get("arguments") or {}
         try:

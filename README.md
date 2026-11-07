@@ -145,6 +145,18 @@ Claude, in any session or from your phone: *"add a session for ~/code/api on son
 | `remove_session` | remove one from `sessions.toml`; `stop: true` stops it first. Conversations are kept |
 | `start_sessions` / `stop_sessions` / `restart_sessions` | same as `fleet up` / `down` / `restart` |
 
+For exact control, use the slash commands instead (type `/mcp__fleet` and pick one). Each tells
+Claude exactly which tool to call, so "session" can't be misread:
+
+| Command | Does |
+|---|---|
+| `/mcp__fleet__status` | table of sessions and their state |
+| `/mcp__fleet__add <name> <dir> [model]` | add a session and start it |
+| `/mcp__fleet__remove <name>` | stop it if running, then remove it |
+| `/mcp__fleet__start [names...]` | start these (default: all autostart ones) |
+| `/mcp__fleet__stop <names...>` | stop these |
+| `/mcp__fleet__restart <names...>` | restart these |
+
 The server (`bin/fleet-mcp`, stdlib Python) just runs the `fleet` command, so the CLI and the tools
 always agree. Skip it with `install.sh --no-mcp`, or register it by hand:
 `claude mcp add --scope user fleet -- ~/.local/bin/fleet-mcp`. Stopping the session you are chatting

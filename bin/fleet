@@ -266,11 +266,20 @@ def cmd_respawn(args) -> None:
     _, sessions = load_config()
     targets = select(sessions, args.names)
     live = running()
+    failed = False
     for s in targets:
         for a in live_for(s["name"], live):
             if a.get("kind") == "background":
-                subprocess.run([CLAUDE, "respawn", a["id"]], timeout=60)
-                print(f"~ {s['name']}: respawned")
+                r = subprocess.run([CLAUDE, "respawn", a["id"]], timeout=60,
+                                   capture_output=True, text=True)
+                if r.returncode == 0:
+                    print(f"~ {s['name']}: respawned")
+                else:
+                    msg = (r.stderr or r.stdout).strip().splitlines()
+                    print(f"! {s['name']}: not respawned: {msg[-1] if msg else 'error'}")
+                    failed = True
+    if failed:
+        sys.exit(1)
 
 
 def cmd_ls(args) -> None:
