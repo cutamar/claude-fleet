@@ -10,11 +10,11 @@ Run each check, then tell the user in one message what's missing:
 - Linux (`uname -s` prints `Linux`). macOS and Windows are not supported: stop and say so.
 - `claude --version` works.
 - `python3 -c 'import sys; print(sys.version_info >= (3, 11))'` prints `True`.
-- `git` and `jq` are installed.
+- `git` is installed (`jq` is handy for step 3 but optional).
 - Optional: `fzf` (for `fleet pick`), `kitty` or `alacritty` (for the hotkey window), `notify-send`.
 
 If a required tool is missing, give the user the install command for their distribution
-(e.g. `sudo pacman -S jq`, `sudo apt install jq`) and wait. Don't install system packages yourself.
+(e.g. `sudo pacman -S git`, `sudo apt install git`) and wait. Don't install system packages yourself.
 
 ## 2. Get the code
 
@@ -79,32 +79,16 @@ fleet up
 fleet ls
 ```
 
-## 6. Optional: the progress panel
-
-Ask whether the user wants the live `/dev-team` progress panel. If yes, either ask them to type this
-at the Claude Code prompt:
-
-```text
-/plugin install dev-team-view --marketplace cutamar/claude-fleet
-```
-
-or run it from the shell yourself:
-
-```bash
-claude plugin install dev-team-view --marketplace cutamar/claude-fleet
-```
-
-## 7. Finish
+## 6. Finish
 
 Tell the user, briefly:
 
 - `fleet` (or Super+Alt+C on Hyprland) opens the session switcher. `Space` peeks, `Enter` opens,
   `←` goes back.
-- `/dev-team <task>` runs the agent team in any session.
-- The installer registered a `fleet` MCP server, so they can also just ask Claude in any chat to list,
-  add, remove, start, stop or restart sessions. New Claude sessions pick it up; running ones need
-  `fleet respawn`.
-- Sessions that were already running need `fleet respawn` (or a restart) to see the new agents.
+- In any Claude session, `/fleet:status`, `/fleet:add`, `/fleet:stop` etc. manage the sessions,
+  or they can just ask ("stop website"). Sessions that were already running need `fleet respawn`
+  to see the commands.
+- For the dev team of subagents (`/dev-team`), see https://github.com/cutamar/claude-skills.
 - `fleet down && ~/claude-fleet/uninstall.sh` removes everything.
 
 ## Updating later

@@ -1,24 +1,24 @@
 #!/usr/bin/env bash
 # Install Claude Fleet. Safe to re-run; undo with ./uninstall.sh
 #   - links the `fleet` command into ~/.local/bin
-#   - links the dev-team agents, the /dev-team skill and the agent guard hooks into ~/.claude
+#   - installs the `fleet` plugin (/fleet:status, /fleet:stop, ...) from this repo's marketplace
 #   - creates sessions.toml from sessions.example.toml if you don't have one yet
 #   - autostart at login: Hyprland (plus Super+Alt+C hotkey) if found, otherwise an XDG autostart entry
 # Options:
 #   --systemd        start sessions at boot, before you log in (systemd user service + linger);
 #                    replaces the login autostart (the Hyprland hotkey stays)
 #   --no-autostart   skip all autostart / hotkey setup
-#   --no-mcp         don't register the `fleet` MCP server (manage sessions from any Claude chat)
+#   --no-plugin      don't install the `fleet` plugin
 set -euo pipefail
 REPO="$(cd "$(dirname "$0")" && pwd)"
 AUTOSTART=1
 SYSTEMD=0
-MCP=1
+PLUGIN=1
 for arg in "$@"; do
   case "$arg" in
     --no-autostart) AUTOSTART=0 ;;
     --systemd) SYSTEMD=1 ;;
-    --no-mcp) MCP=0 ;;
+    --no-plugin) PLUGIN=0 ;;
     -h|--help) sed -n '2,12p' "$0"; exit 0 ;;
     *) echo "unknown option: $arg" >&2; exit 2 ;;
   esac
@@ -27,7 +27,6 @@ done
 need() { command -v "$1" >/dev/null 2>&1 || { echo "missing: $1 ($2)" >&2; exit 1; }; }
 need claude "install Claude Code first: https://code.claude.com"
 need python3 "Python 3.11 or newer"
-need jq "used by the agent guard hooks"
 python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' \
   || { echo "Python 3.11 or newer is required (found $(python3 -V))" >&2; exit 1; }
 
@@ -39,13 +38,21 @@ link() {  # link SRC DEST, refusing to overwrite a real file
   ln -sfn "$src" "$dest"; echo "link: $dest"
 }
 
-mkdir -p "$HOME/.local/bin" "$HOME/.claude/agents" "$HOME/.claude/skills"
-chmod +x "$REPO/bin/fleet" "$REPO/bin/fleet-mcp" "$REPO"/hooks/*.sh
+mkdir -p "$HOME/.local/bin"
+chmod +x "$REPO/bin/fleet"
 link "$REPO/bin/fleet" "$HOME/.local/bin/fleet"
-link "$REPO/bin/fleet-mcp" "$HOME/.local/bin/fleet-mcp"
-link "$REPO/hooks" "$HOME/.claude/fleet-hooks"
-for f in "$REPO"/agents/*.md; do link "$f" "$HOME/.claude/agents/$(basename "$f")"; done
-link "$REPO/skills/dev-team" "$HOME/.claude/skills/dev-team"
+
+# Older versions also shipped the dev team (now github.com/cutamar/claude-skills) and an MCP
+# server: remove their leftover links that point into this repo.
+for l in "$HOME/.local/bin/fleet-mcp" "$HOME/.claude/fleet-hooks" "$HOME/.claude/skills/dev-team" \
+         "$HOME"/.claude/agents/*.md; do
+  if [ -L "$l" ] && [[ "$(readlink "$l")" == "$REPO"/* ]]; then rm "$l"; echo "gone: $l (old version)"; fi
+done
+if claude mcp get fleet 2>/dev/null | grep -qF "fleet-mcp"; then
+  claude mcp remove --scope user fleet >/dev/null 2>&1 && echo "gone: MCP server 'fleet' (replaced by the fleet plugin)"
+fi
+claude plugin uninstall dev-team-view@claude-fleet >/dev/null 2>&1 \
+  && echo "gone: dev-team-view@claude-fleet (now in claude-skills)" || true
 
 if [ ! -f "$REPO/sessions.toml" ]; then
   cp "$REPO/sessions.example.toml" "$REPO/sessions.toml"
@@ -109,16 +116,17 @@ EOF
   fi
 fi
 
-if [ "$MCP" = 1 ]; then
-  if claude mcp get fleet >/dev/null 2>&1; then
-    echo "ok:   MCP server 'fleet' already registered"
-  elif claude mcp add --scope user fleet -- "$HOME/.local/bin/fleet-mcp" >/dev/null 2>&1; then
-    echo "on:   MCP server 'fleet' (user scope): manage sessions from any Claude chat"
+if [ "$PLUGIN" = 1 ]; then
+  claude plugin marketplace list 2>/dev/null | grep -qF "$REPO" \
+    || claude plugin marketplace add "$REPO" >/dev/null 2>&1 || true
+  if claude plugin install fleet@claude-fleet >/dev/null 2>&1; then
+    echo "on:   fleet plugin: /fleet:status, /fleet:add, /fleet:stop, ... in every Claude session"
   else
-    echo "todo: register the MCP server: claude mcp add --scope user fleet -- $HOME/.local/bin/fleet-mcp"
+    echo "todo: claude plugin marketplace add $REPO && claude plugin install fleet@claude-fleet"
   fi
 fi
 
 case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) echo "note: add ~/.local/bin to your PATH" ;; esac
 echo
 echo "Done. Next: fleet ls   (then fleet up to start your sessions)"
+echo "Running sessions see the /fleet: commands after: fleet respawn"

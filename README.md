@@ -1,13 +1,16 @@
 # Claude Fleet
 
-**Named, always-on Claude Code sessions plus a ready-made dev team of subagents.**
+**Named, always-on Claude Code sessions you can manage from any chat.**
 
 You probably keep several Claude Code sessions open, one per project. Claude Fleet keeps them running:
 they start at login, pick up their last conversation, run in auto mode with Remote Control on
 (so you can reach them from your phone), and one hotkey or command lets you switch between them.
 
-It also installs a **dev team**: an Opus planner, cheaper Sonnet/Haiku workers, read-only reviewers
-with real guardrails, and per-agent memory. Plus a live **progress panel** that shows what the team is doing.
+Manage them from any session, including from your phone, with `/fleet:status`, `/fleet:stop lodestar` and
+friends, or just by asking.
+
+Looking for the dev team of subagents (`/dev-team`) that used to live here? It moved to
+[claude-skills](https://github.com/cutamar/claude-skills).
 
 ```text
 $ fleet ls
@@ -42,13 +45,7 @@ fleet add my-app ~/code/my-app && fleet up
 
 Then open the switcher with `fleet`, or press **Super+Alt+C** on Hyprland.
 
-Optional: the live `/dev-team` progress panel. Run this inside Claude Code:
-
-```text
-/plugin install dev-team-view --marketplace cutamar/claude-fleet
-```
-
-**Requirements:** Linux, [Claude Code](https://code.claude.com) 2.1.3xx or newer, Python 3.11+, `git`, `jq`.
+**Requirements:** Linux, [Claude Code](https://code.claude.com) 2.1.3xx or newer, Python 3.11+, `git`.
 Optional: `fzf` (for `fleet pick`), `kitty` or `alacritty` (for the hotkey window), `notify-send`.
 
 ---
@@ -90,101 +87,27 @@ Running `fleet up` again is always safe: sessions that already run are left alon
 In the input box at the bottom of agent view, `Enter` starts a **new** session. To reply to an
 existing one, use the peek panel.
 
-### 3. A dev team: `/dev-team <task>`
+### 3. Manage sessions from any chat: `/fleet:*`
 
-| Agent | Model | Memory | Role |
-|---|---|---|---|
-| `planner` | Opus | ✓ | read-only architect: tasks, parallel waves, risk, model per task |
-| `implementer` | Sonnet | ✓ | one task per run, self-review, status report |
-| `test-engineer` | Sonnet | ✓ | tests (test-first when asked) |
-| `debugger` | Sonnet | ✓ | root cause + minimal verified fix |
-| `reviewer` | Sonnet | ✓ | read-only gate: spec compliance + code quality |
-| `security-reviewer` | Opus | ✓ | read-only, for security-sensitive changes |
-| `scout` | Haiku | – | fast lookups (a cheap replacement for general-purpose agents) |
-| `docs-writer` | Haiku | – | docs |
-
-How a `/dev-team` run goes:
-
-1. The planner writes a plan of small tasks grouped into **waves**.
-2. You approve it.
-3. Each wave runs **in parallel**, each task in its own git worktree, then the worktrees are merged.
-4. Every task is reviewed before the next wave starts. Failed fixes escalate to a stronger model.
-5. The whole branch gets a final review, then docs are updated.
-
-Progress is kept in `.claude/plans/<slug>.progress.md`, so long runs survive context compaction.
-You can also call one agent directly: *"use the planner to…"*, *"@scout where is…"*.
-
-Built on conventions from [obra/superpowers](https://github.com/obra/superpowers),
-[everything-claude-code](https://github.com/affaan-m/everything-claude-code),
-[wshobson/agents](https://github.com/wshobson/agents) and the
-[official subagent docs](https://code.claude.com/docs/en/sub-agents).
-
-### 4. Guardrails and memory
-
-- **Read-only agents really are read-only.** `hooks/readonly-bash.sh` blocks shell commands that write
-  files, change git state or install packages.
-- **Memory without losing that.** Agents that run repeatedly keep dated notes in
-  `<project>/.claude/agent-memory-local/<agent>/MEMORY.md`, loaded automatically at start.
-  Memory normally gives an agent Write/Edit, so `hooks/only-memory-file.sh` limits each read-only agent
-  to **its own notes file and nothing else**.
-- At the end of a `/dev-team` run, stable rules from the notes are proposed for `CLAUDE.md`
-  (applied only with your OK).
-- Workers can't spawn their own subagents, every agent has a turn cap, and every subagent call names
-  its model, so nothing silently runs on Opus.
-
-### 5. Manage sessions from any chat (MCP server)
-
-The installer registers a `fleet` MCP server (user scope), so you can manage the fleet by just asking
-Claude, in any session or from your phone: *"add a session for ~/code/api on sonnet and start it"*,
-*"stop website"*, *"which sessions are running?"*.
-
-| Tool | Does |
-|---|---|
-| `list_sessions` | configured sessions with folder, options and live state |
-| `add_session` | add one (name, folder, model, effort, autostart), optionally start it |
-| `remove_session` | remove one from `sessions.toml`; `stop: true` stops it first. Conversations are kept |
-| `start_sessions` / `stop_sessions` / `restart_sessions` | same as `fleet up` / `down` / `restart` |
-
-For exact control, use the slash commands instead (type `/mcp__fleet` and pick one). Each tells
-Claude exactly which tool to call, so "session" can't be misread:
+The installer adds the `fleet` plugin to Claude Code, so every session (and the Claude app on your
+phone) has these commands. Type `/fleet` to see them:
 
 | Command | Does |
 |---|---|
-| `/mcp__fleet__status` | table of sessions and their state |
-| `/mcp__fleet__add <name> <dir> [model]` | add a session and start it |
-| `/mcp__fleet__remove <name>` | stop it if running, then remove it |
-| `/mcp__fleet__start [names...]` | start these (default: all autostart ones) |
-| `/mcp__fleet__stop <names...>` | stop these |
-| `/mcp__fleet__restart <names...>` | restart these |
+| `/fleet:status` | table of your sessions and whether they're running |
+| `/fleet:add <name> <folder> [model]` | add a session and start it |
+| `/fleet:remove <name>` | stop it if it runs, then remove it (its conversations are kept) |
+| `/fleet:start [names...]` | start these (no names: all autostart ones) |
+| `/fleet:stop <names...>` | stop these |
+| `/fleet:restart <names...>` | restart these, resuming their conversations |
 
-The server (`bin/fleet-mcp`, stdlib Python) just runs the `fleet` command, so the CLI and the tools
-always agree. Skip it with `install.sh --no-mcp`, or register it by hand:
-`claude mcp add --scope user fleet -- ~/.local/bin/fleet-mcp`. Stopping the session you are chatting
-from ends that chat.
+The commands just run `fleet`, pre-approved, so there are no permission prompts. You can also ask in
+plain words ("is lodestar running?", "add ~/code/api as api on sonnet"): the plugin's skill teaches
+Claude the `fleet` command, and it asks when it isn't sure which session you mean.
 
-### 6. Live progress panel (optional mod)
-
-The `dev-team-view` mod adds a panel beside the chat that follows the current run, plus a one-line
-summary above the prompt:
-
-```text
-Add --version flag
-running · wave 2/3 · base 8d59750
-
-Wave 1
-T1   DONE       ✅   implementer/haiku · flag added
-Wave 2
-T2   running    -    test-engineer/sonnet
-T3   DONE_WITH_CONCERNS ❌ r1 implementer/sonnet · README row
-
-Rulings: 1 · last: print bare version — user asked — low
-```
-
-```text
-dev-team: Add --version flag · wave 2/3 · 1 running · 1 need fixes · 1/3 done   [Open] [Hide]
-```
-
-It opens by itself when a run starts. Open it any time with `/dev-team-view`.
+Stopping the session you are typing in ends that chat (`fleet` stops it last). `fleet restart`
+refuses to restart it, because it would stop before it could start again: do that from another
+session or a terminal.
 
 ---
 
@@ -204,7 +127,6 @@ It opens by itself when a run starts. Open it any time with `/dev-team-view`.
 | `fleet rm <name> [--stop]` | remove a session from `sessions.toml` (its conversations are kept) |
 | `fleet edit` | open `sessions.toml` |
 | `fleet logs <name>` | recent output |
-| `fleet memory` / `fleet memory sync [repo]` | agent notes sizes / copy notes back from worktree runs |
 
 ## Configuration: `sessions.toml`
 
@@ -219,7 +141,7 @@ dir = "~/code/my-app"
 autostart = true
 # model = "sonnet"           # opus | sonnet | haiku | full model id
 # effort = "high"            # low | medium | high | xhigh | max
-# agent = "planner"          # run the whole session as one agent
+# agent = "planner"          # run the whole session as one agent from ~/.claude/agents
 # args = ["--add-dir", "~/shared"]
 ```
 
@@ -238,8 +160,8 @@ untrusted folders.
   `systemctl --user disable claude-fleet && ./install.sh`.
 - **Hotkey on other desktops:** bind any key to `fleet ui` in your desktop's keyboard settings.
 - **After `claude update`:** run `fleet respawn` so running sessions use the new version.
-- **New agents not showing up:** agent definitions load at session start; `fleet respawn` reloads them.
-- **Notes growing large:** `fleet memory` warns past 180 lines, because only the first 200 are loaded.
+- **`/fleet:` commands missing:** plugins load at session start; `fleet respawn` reloads them.
+  `claude plugin list` should show `fleet@claude-fleet`.
 
 ## Uninstall
 
@@ -247,19 +169,14 @@ untrusted folders.
 fleet down && ~/claude-fleet/uninstall.sh
 ```
 
-This removes the links, the MCP server, the autostart entry or boot service, and the hotkey. Your `sessions.toml` and
-agent notes stay. Linger is left on (other services may use it): `loginctl disable-linger` turns it off.
-Remove the panel with `/plugin uninstall dev-team-view`.
+This removes the link, the `fleet` plugin, the autostart entry or boot service, and the hotkey. Your
+`sessions.toml` stays. Linger is left on (other services may use it): `loginctl disable-linger` turns it off.
 
 ## Repository layout
 
 ```text
 bin/fleet                     the session manager (Python, stdlib only)
-bin/fleet-mcp                 MCP server exposing fleet as tools (Python, stdlib only)
-agents/                       dev-team subagent definitions
-skills/dev-team/SKILL.md      the /dev-team orchestration workflow
-hooks/                        read-only and memory-file guards (+ test.sh)
-plugins/dev-team-view/        the progress panel mod
+plugins/fleet/                the fleet plugin: /fleet:* commands and the fleet skill
 .claude-plugin/marketplace.json
 systemd/claude-fleet.service the boot service (install.sh --systemd)
 install.sh / uninstall.sh

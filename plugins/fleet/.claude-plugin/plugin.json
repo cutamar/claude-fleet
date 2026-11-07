@@ -1,0 +1,11 @@
+{
+  "name": "fleet",
+  "version": "1.0.0",
+  "description": "Manage Claude Fleet sessions from any chat: /fleet:status, /fleet:add, /fleet:remove, /fleet:start, /fleet:stop, /fleet:restart",
+  "author": {
+    "name": "Amar Cutura"
+  },
+  "license": "MIT",
+  "homepage": "https://github.com/cutamar/claude-fleet",
+  "repository": "https://github.com/cutamar/claude-fleet"
+}

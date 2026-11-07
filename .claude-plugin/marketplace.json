@@ -1,14 +1,14 @@
 {
   "name": "claude-fleet",
-  "description": "Claude Fleet: named always-on Claude Code sessions and a dev team of subagents. This marketplace ships the dev-team-view progress panel.",
+  "description": "Claude Fleet: named, always-on Claude Code sessions. This marketplace ships the fleet plugin (/fleet:* commands).",
   "owner": {
     "name": "Amar Cutura"
   },
   "plugins": [
     {
-      "name": "dev-team-view",
-      "source": "./plugins/dev-team-view",
-      "description": "Live /dev-team progress: a pane with waves, tasks, reviews and rulings, plus a one-line band while a run is active"
+      "name": "fleet",
+      "source": "./plugins/fleet",
+      "description": "Manage Claude Fleet sessions from any chat: /fleet:status, /fleet:add, /fleet:remove, /fleet:start, /fleet:stop, /fleet:restart"
     }
   ]
 }

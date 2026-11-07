@@ -103,6 +103,12 @@ def live_for(name: str, live: list[dict]) -> list[dict]:
     return [a for a in live if a.get("name") == name]
 
 
+def is_self(agent: dict) -> bool:
+    """True when fleet runs inside this session (e.g. a /fleet: command typed in it)."""
+    sid, aid = os.environ.get("CLAUDE_CODE_SESSION_ID", ""), str(agent.get("id") or "")
+    return bool(aid) and sid.startswith(aid)
+
+
 def is_trusted(directory: str) -> bool:
     try:
         projects = json.loads((HOME / ".claude.json").read_text()).get("projects", {})
@@ -246,16 +252,29 @@ def cmd_down(args) -> None:
     _, sessions = load_config()
     targets = select(sessions, args.names)
     live = running()
+    mine = []
     for s in targets:
         bg = [a for a in live_for(s["name"], live) if a.get("kind") == "background"]
         if not bg:
             print(f"= {s['name']}: not running")
         for a in bg:
+            if is_self(a):
+                mine.append((s, a))  # stop the session we run in last, or the rest never happens
+                continue
             subprocess.run([CLAUDE, "stop", a["id"]], capture_output=True, timeout=30)
             print(f"- {s['name']}: stopped ({a['id']})")
+    for s, a in mine:
+        print(f"- {s['name']}: stopping ({a['id']}) - this is the session you are in", flush=True)
+        subprocess.run([CLAUDE, "stop", a["id"]], capture_output=True, timeout=30)
 
 
 def cmd_restart(args) -> None:
+    _, sessions = load_config()
+    live = running()
+    for s in select(sessions, args.names):
+        if any(is_self(a) for a in live_for(s["name"], live)):
+            die(f"{s['name']} is the session you are in: restarting it would stop it before it "
+                "can start again. Run this from another session or a terminal.")
     cmd_down(args)
     time.sleep(1)
     cmd_up(argparse.Namespace(names=args.names, boot=False, fresh=False))
@@ -463,59 +482,6 @@ def cmd_rm(args) -> None:
     print(f"removed {args.name} from {CONFIG} (its conversations are kept)")
 
 
-MEM_WARN = 180  # Claude loads only the first 200 lines of an agent's MEMORY.md
-
-
-def memory_files(root: Path) -> list[Path]:
-    return sorted(root.glob(".claude/agent-memory-local/*/MEMORY.md"))
-
-
-def sync_worktree_memory(repo: Path) -> int:
-    """Copy note lines from agent worktrees (.claude/worktrees/*) into the repo's own files."""
-    added = 0
-    for wt_file in sorted(repo.glob(".claude/worktrees/*/.claude/agent-memory-local/*/MEMORY.md")):
-        if wt_file.is_symlink():
-            continue
-        agent = wt_file.parent.name
-        if not NAME_RE.match(agent):
-            continue
-        main = repo / ".claude/agent-memory-local" / agent / "MEMORY.md"
-        if main.is_symlink():
-            continue
-        main.parent.mkdir(parents=True, exist_ok=True)
-        text = main.read_text() if main.exists() else ""
-        have = text.splitlines()
-        new = [l for l in wt_file.read_text().splitlines()
-               if l.strip().startswith("- ") and l not in have]
-        if new:
-            with main.open("a") as f:
-                if text and not text.endswith("\n"):
-                    f.write("\n")
-                f.write("\n".join(new) + "\n")
-            print(f"+ {agent}: {len(new)} line(s) from {wt_file.parents[3].name}")
-            added += len(new)
-    return added
-
-
-def cmd_memory(args) -> None:
-    if args.action == "sync":
-        repo = Path(args.repo or os.getcwd()).expanduser().resolve()
-        n = sync_worktree_memory(repo)
-        print(f"synced {n} line(s) into {repo}" if n else "nothing to sync")
-        return
-    _, sessions = load_config()
-    roots = sorted({Path(s["dir"]) for s in sessions})
-    found = False
-    for root in roots:
-        for f in memory_files(root):
-            found = True
-            lines = len(f.read_text().splitlines())
-            warn = f"  ! over {MEM_WARN} lines - prune it (only 200 are loaded)" if lines > MEM_WARN else ""
-            print(f"{lines:4}  {str(f).replace(str(HOME), '~')}{warn}")
-    if not found:
-        print("no agent memory yet")
-
-
 def cmd_edit(args) -> None:
     editor = os.environ.get("EDITOR") or shutil.which("nvim") or shutil.which("nano") or "vi"
     os.execvp(editor, [editor, str(CONFIG)])
@@ -571,11 +537,6 @@ def main() -> None:
     a.add_argument("name")
     a.add_argument("--stop", action="store_true", help="stop it first if it is running")
     a.set_defaults(fn=cmd_rm)
-
-    a = sub.add_parser("memory", help="list agent memory files (sizes), or `sync` notes back from worktrees")
-    a.add_argument("action", nargs="?", choices=["list", "sync"], default="list")
-    a.add_argument("repo", nargs="?", help="repo for `sync` (default: current folder)")
-    a.set_defaults(fn=cmd_memory)
 
     sub.add_parser("edit", help="open sessions.toml in $EDITOR").set_defaults(fn=cmd_edit)
 
